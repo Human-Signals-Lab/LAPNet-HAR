@@ -249,15 +249,15 @@ print(" ..after sliding and reshaping, test data : inputs {0}, targets {1}".form
 print(np.shape(X_train))
 print(Counter(y_train_segments))
 
-# # remove null class
+# remove null class
 
-# X_train = X_train[y_train_segments != 0]
-# X_test = X_test[y_test_segments != 0]
+X_train = X_train[y_train_segments != 0]
+X_test = X_test[y_test_segments != 0]
 
-# y_train_segments = y_train_segments[y_train_segments != 0]
-# y_train_segments = y_train_segments -1
-# y_test_segments = y_test_segments[y_test_segments != 0]
-# y_test_segments = y_test_segments - 1
+y_train_segments = y_train_segments[y_train_segments != 0]
+y_train_segments = y_train_segments -1
+y_test_segments = y_test_segments[y_test_segments != 0]
+y_test_segments = y_test_segments - 1
 
 print(Counter(y_train_segments))
 
@@ -314,7 +314,7 @@ optimizer = optim.Adam(model.parameters(), lr=1e-3,betas=(0.9, 0.999), eps=1e-08
 
 #criterion = nn.CrossEntropyLoss()
 
-num_epochs = 100
+num_epochs = 50
 ### Training Loop ########
 iteration = 0
 for epoch in range(num_epochs):
@@ -336,7 +336,8 @@ for epoch in range(num_epochs):
 
 
         #print(np.shape(labels))
-        yhat, h = model(inputs,h,BATCH_SIZE)
+        yhat, h, _ = model(inputs,h,BATCH_SIZE)
+
 
         #clipwise_output = model(inputs,inputs.shape[0])
         #print("....",np.shape(clipwise_output))
@@ -369,7 +370,7 @@ for epoch in range(num_epochs):
             #print(np.shape(val_h[0]), np.shape(val_input))        
 
 
-            yhat, val_h = model(val_input, val_h, BATCH_SIZE_VAL)
+            yhat, val_h, _ = model(val_input, val_h, BATCH_SIZE_VAL)
             #clipwise_output = model(val_input,val_input.shape[0])
             #clipwise_output = yhat['clipwise_output']
             test_loss = F.binary_cross_entropy(yhat, y_val)
@@ -403,16 +404,41 @@ for epoch in range(num_epochs):
         
 print('Finished Training')
 
+### Save model ########
+
+PATH = './Opp_model/'
+
+if not os.path.exists(PATH):
+    os.makedirs(PATH)
+PATH = PATH + '/DeepConvLSTM_Opportunity_noNull.pth'
+torch.save(model.state_dict(), PATH)
+
 
 print('Inference...............')
 eval_output = []
 true_output = []
 val_h = model.init_hidden(BATCH_SIZE_VAL)
+tr_h = model.init_hidden(BATCH_SIZE)
 true_output = []
 #embedding_output = np.empty((0,60928))
 #embedding_output = np.empty((0,2048))
 model.eval()
+embeddings_list = dict()
+embeddings_list['embeddings'] = []
+embeddings_list['labels'] = []
 with torch.no_grad():
+
+    for tr_input, y_tr in train_loader:
+        tr_h = tuple(each.data for each in tr_h)
+
+        tr_input = torch.from_numpy(np.array(tr_input)).float()
+        tr_input = tr_input.cuda()
+        y_tr = y_tr.cuda()
+
+        yhat, tr_h, embeddings = model(tr_input, tr_h, BATCH_SIZE)
+        embeddings_list['embeddings'].append(embeddings.data.cpu().numpy())
+        embeddings_list['labels'].append(y_tr.data.cpu().numpy())
+
     for val_input, y_val in test_loader:
 
         val_h = tuple([each.data for each in val_h])
@@ -423,7 +449,10 @@ with torch.no_grad():
         y_val = y_val.cuda()
     
 
-        yhat, val_h = model(val_input, val_h, BATCH_SIZE_VAL)
+        yhat, val_h, embeddings = model(val_input, val_h, BATCH_SIZE_VAL)
+        embeddings_list['embeddings'].append(embeddings.data.cpu().numpy())
+        embeddings_list['labels'].append(y_val.data.cpu().numpy())
+
         #embeddings = yhat['embedding']
         #embedding_output = np.vstack((embedding_output,embeddings.cpu().numpy()))
         #clipwise_output = model(val_input, val_input.shape[0])

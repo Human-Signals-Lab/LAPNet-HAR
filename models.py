@@ -171,10 +171,13 @@ class DeepConvLSTM_old(nn.Module):
 
         return {'clipwise_output': output, 'embedding': x1}
 
+
+
 class DeepConvLSTM(nn.Module):
     def __init__(self, n_hidden=128, n_layers=1, n_filters=64, 
                  n_classes=NUM_CLASSES, filter_size=5, drop_prob=0.5):
         super(DeepConvLSTM, self).__init__()
+
         self.drop_prob = drop_prob
         self.n_layers = n_layers
         self.n_hidden = n_hidden
@@ -222,18 +225,23 @@ class DeepConvLSTM(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         x = F.relu(self.conv4(x))
-        
+        #print(np.shape(x))
+
         x = x.view(8, -1, self.n_filters)
         x, hidden = self.lstm1(x, hidden)
         x, hidden = self.lstm2(x, hidden)
-        
+        #print(np.shape(x))
+
         x = x.contiguous().view(-1, self.n_hidden)
+        embeddings = x.contiguous().view(batch_size,-1,self.n_hidden)[:,-1,:]
         x = self.dropout(x)
         x = torch.sigmoid(self.fc(x))
-        
+        #print(np.shape(x))
+        temp = x.view(batch_size, -1, self.n_classes)
+        #print(np.shape(temp))
         out = x.view(batch_size, -1, self.n_classes)[:,-1,:]
         
-        return out, hidden
+        return out, hidden, embeddings
     
     def init_hidden(self, batch_size):
         ''' Initializes hidden state '''

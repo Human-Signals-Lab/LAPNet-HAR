@@ -44,6 +44,7 @@ os.environ["CUDA_VISIBLE_DEVICES"]="0"
 from data_handler import *
 import shutil
 from prototype_memory_v2 import *
+from proto_net import *
 
 
 def plotCNNStatistics(statistics_path):
@@ -87,7 +88,8 @@ def plotCNNStatistics(statistics_path):
     ax.yaxis.set_ticks(np.arange(0, 1.01, 0.05))
     ax.yaxis.set_ticklabels(np.around(np.arange(0, 1.01, 0.05), decimals=2))        
     plt.ylabel('Test Average Fscore')
-    
+
+
 def plot_confusion_matrix(cm, class_list,
                           normalize=False,
                           title='Confusion matrix',
@@ -201,6 +203,46 @@ def load_dataset(filename):
 
     return X_train, y_train, X_test, y_test
 
+
+def extract_sample(n_classes, n_support, n_query, inputs, labels, seed):
+
+    support = []
+    y_support = []
+    query = []
+    y_query = []
+    np.random.seed(seed)
+    #print(Counter(labels.data.cpu().numpy()))
+    K = np.random.choice(np.unique(labels), n_classes, replace=False)
+    #print(np.shape(inputs))
+    change = 0
+    for cls in K:
+        datax_cls = inputs[labels == cls]
+        perm = np.random.permutation(datax_cls)
+        #print(np.shape(perm))
+        if len(perm) < n_support:
+            change += n_support - len(perm)
+        support_cls = perm[:n_support]
+        #print(np.shape(support_cls))
+        support.extend(support_cls)
+        y_support.extend([cls]*n_support)
+        query_cls = perm[n_support:]
+        query.extend(query_cls)
+        y_query.extend([cls]*n_query)
+        #sample.append(sample_cls)
+
+    if change > 0:
+        support.extend(query[-change:])
+        query = query[:-change]
+    #print(np.shape(support), type(support))
+    #print(np.shape(support), type(support))
+    support = np.array(support)
+    support = torch.from_numpy(support).float()
+    query = np.array(query)
+    query = torch.from_numpy(query).float()
+    return support, y_support, query, y_query
+
+
+
 print("Loading data...")
 X_train, y_train, X_test, y_test = load_dataset('oppChallenge_gestures.data')
 print(np.shape(y_train))
@@ -251,7 +293,6 @@ for i in np.arange(baseClassesNb):
 for x in range(len(baseData['label'])):
     baseData['label'][x] = mapping[baseData['label'][x]]
 
-
 ## select base classes in test data 
 X_test_select = []
 y_test_select = []
@@ -264,67 +305,153 @@ y_train = tf.keras.utils.to_categorical(baseData['label'], num_classes=baseClass
 y_test = tf.keras.utils.to_categorical(y_test_select, num_classes=baseClassesNb, dtype='int32')
 
 #model = InceptionNN(NUM_CLASSES)
-model = DeepConvLSTM(n_classes=len(np.unique(baseData['label'])))
+extractor = DeepConvLSTM(n_classes=len(np.unique(baseData['label'])))
+model = ProtoNet(extractor,128,baseClassesNb)
 
 if torch.cuda.is_available():
     model.cuda()
+
+# Statistics
+statistics_path = './statistics/OnlineProtoNet_DeepConvLSTM_Opportunity.pkl'
+
+if not os.path.exists(os.path.dirname(statistics_path)):
+    os.makedirs(os.path.dirname(statistics_path))
+statistics_container = StatisticsContainer(statistics_path)
+
 
 
 ## pretrain base model
 x_train_tensor = torch.from_numpy(np.array(baseData['data'])).float()
 y_train_tensor = torch.from_numpy(np.array(y_train)).float()
+x_test_tensor = torch.from_numpy(np.array(X_test_select)).float()
+y_test_tensor = torch.from_numpy(np.array(y_test)).float()
 train_data = TensorDataset(x_train_tensor, y_train_tensor)
+test_data = TensorDataset(x_test_tensor, y_test_tensor)
+
 train_loader = torch.utils.data.DataLoader(dataset=train_data, 
                     batch_size=BATCH_SIZE,
                     num_workers=1, pin_memory=True, shuffle = True,drop_last=True)
 
-optimizer = optim.Adam(model.parameters(), lr=1e-3,betas=(0.9, 0.999), eps=1e-08, weight_decay=0., amsgrad=True)
-
-
-num_epochs = 30
-for epoch in range(num_epochs):
-
-    h = model.init_hidden(BATCH_SIZE) 
-    model.train()       
-
-    #running_loss = 0.0
-    for d in train_loader:
-        # get the inputs; data is a list of [inputs, labels]
-        inputs, labels = d
-        inputs = inputs.cuda()
-        labels = labels.cuda()
-        h = tuple([each.data for each in h])
-
-        # zero the parameter gradients
-        optimizer.zero_grad()
-
-
-
-        #print(np.shape(labels))
-        yhat, h, _  = model(inputs,h,BATCH_SIZE)
-
-        #clipwise_output = model(inputs,inputs.shape[0])
-        #print("....",np.shape(clipwise_output))
-        #clipwise_output = outputs['clipwise_output']
-        loss = F.binary_cross_entropy(yhat, labels)
-        loss.backward()
-        optimizer.step()
-
-
-    print('[Epoch %d]' % (epoch + 1))
-    print('Train loss: {}'.format(loss))
-
-
-x_test_tensor = torch.from_numpy(np.array(X_test_select)).float()
-y_test_tensor = torch.from_numpy(np.array(y_test)).float()
-test_data = TensorDataset(x_test_tensor, y_test_tensor)
 
 test_loader = torch.utils.data.DataLoader(dataset=test_data, 
                         batch_size=BATCH_SIZE_VAL,
                         num_workers=1, pin_memory=True, shuffle = True,drop_last=True)
 
+optimizer = optim.Adam(model.parameters(), lr=1e-4,betas=(0.9, 0.999), eps=1e-08, weight_decay=0., amsgrad=True)
+#scheduler = optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.5,last_epoch=-1)
+## offline base training 
+n_epochs = 20
+n_support = int((1.*BATCH_SIZE/2.)/float(baseClassesNb)) ## 10-shot
+iteration = 0
+for epoch in range(n_epochs):
+    h = model.extractor.init_hidden(n_support*baseClassesNb) 
+    model.train()   
+
+    #running_loss = 0.0
+    for d in train_loader:
+        # get the inputs; data is a list of [inputs, labels]
+        inputs, labels = d
+        #print(labels)
+        x_support, y_support, x_query, y_query = extract_sample(baseClassesNb, n_support, n_support, inputs, np.argmax(labels, axis = 1), seed = iteration)
+        x_support = x_support.cuda()
+        y_support = tf.keras.utils.to_categorical(y_support, num_classes=baseClassesNb, dtype='int32')
+        y_support = torch.from_numpy(y_support).float().cuda()
+        x_query = x_query.cuda()
+        y_query = tf.keras.utils.to_categorical(y_query, num_classes=baseClassesNb, dtype='int32')
+        y_query = torch.from_numpy(y_query).float().cuda()
+        h = tuple([each.data for each in h])
+
+        #print(np.shape(x_support), np.shape(x_query))
+        # zero the parameter gradients
+        optimizer.zero_grad()
+
+        #print(np.shape(labels))
+        log_p = model.forward_offline(x_support,y_support,x_query,h)
+        #print(log_p, y_query)
+        #clipwise_output = model(inputs,inputs.shape[0])
+        #print("....",np.shape(clipwise_output))
+        #clipwise_output = outputs['clipwise_output']
+        loss = F.binary_cross_entropy(log_p, y_query)
+        loss.backward()
+        optimizer.step()
+
+    print('[Epoch %d]' % (epoch + 1))
+    print('Train loss: {}'.format(loss))
+
+
+    eval_output = []
+    true_output = []
+    test_output = []
+    true_test_output = []
+    val_h = model.extractor.init_hidden(n_support*baseClassesNb)
+    #print(np.shape(val_h[0]))        
+
+    model.eval()
+
+    with torch.no_grad():
+
+        for d in test_loader:
+
+            inputs, labels = d
+            #print(labels)
+            x_support, y_support, x_query, y_query = extract_sample(baseClassesNb, n_support, n_support, inputs, np.argmax(labels, axis = 1), seed = iteration)
+            x_support = x_support.cuda()
+            y_support = tf.keras.utils.to_categorical(y_support, num_classes=baseClassesNb, dtype='int32')
+            y_support = torch.from_numpy(y_support).float().cuda()
+            x_query = x_query.cuda()
+            y_query = tf.keras.utils.to_categorical(y_query, num_classes=baseClassesNb, dtype='int32')
+            y_query = torch.from_numpy(y_query).float().cuda()
+            h = tuple([each.data for each in h])
+
+            #print(np.shape(x_support), np.shape(x_query))
+            # zero the parameter gradients
+
+            #print(np.shape(labels))
+            log_p = model.forward_offline(x_support,y_support,x_query,h)
+            #print(log_p, y_query)
+            #clipwise_output = model(inputs,inputs.shape[0])
+            #print("....",np.shape(clipwise_output))
+            #clipwise_output = outputs['clipwise_output']
+            test_loss = F.binary_cross_entropy(log_p, y_query)
+
+            test_output.append(log_p.data.cpu().numpy())
+            true_test_output.append(y_query.data.cpu().numpy())
+
+        test_oo = np.argmax(np.vstack(test_output), axis = 1)
+        true_test_oo = np.argmax(np.vstack(true_test_output), axis = 1)
+
+        accuracy = metrics.accuracy_score(true_test_oo, test_oo)
+        precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, average='weighted')
+        try:
+            auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output), average="weighted")
+        except ValueError:
+            auc_test = None
+        print('Test loss: {}'.format(test_loss))
+        print('TEST average_precision: {}'.format(precision))
+        print('TEST average f1: {}'.format(fscore))
+        print('TEST average recall: {}'.format(recall))
+        print('TEST auc: {}'.format(accuracy))
+
+        trainLoss = {'Trainloss': loss}
+        statistics_container.append(iteration, trainLoss, data_type='Trainloss')
+        testLoss = {'Testloss': test_loss}
+        statistics_container.append(iteration, testLoss, data_type='Testloss')
+        test_f1 = {'test_f1':fscore}
+        statistics_container.append(iteration, test_f1, data_type='test_f1')
+
+        statistics_container.dump()
+
+    iteration += 1
+    #scheduler.step()
+
+plotCNNStatistics(statistics_path)
+  
+
+
+## get prototypes from train data and visualize
+
 ## extract training embeddings
-tr_h = model.init_hidden(BATCH_SIZE) 
+tr_h = model.extractor.init_hidden(BATCH_SIZE) 
 
 model.eval()
 embeddings_list = dict()
@@ -339,36 +466,9 @@ with torch.no_grad():
         tr_input = tr_input.cuda()
         y_tr = y_tr.cuda()
 
-        yhat, tr_h, embeddings = model(tr_input, tr_h, BATCH_SIZE)
+        yhat, tr_h, embeddings = model.extractor(tr_input, tr_h, BATCH_SIZE)
         embeddings_list['embeddings'].extend(embeddings.data.cpu().numpy())
         embeddings_list['labels'].extend(y_tr.data.cpu().numpy())
-
-# ## extract class prototypes
-# def extract_prototypes(X,y):
-
-#     classes = np.sort(np.unique(y))
-#     prototypes = dict()
-#     prot_std = dict()
-#     for c in classes:
-#         prototypes[c] = []
-#         prot_std[c] = []
-#     # prototypes = np.empty((len(classes),np.shape(X)[1]))
-#     # prot_std = np.empty((len(classes),np.shape(X)[1]))
-#     #print(classes)
-#     for c in classes:
-#         p_mean = np.mean(np.array(X)[y==c], axis = 0)
-#         p_std = np.std(np.array(X)[y==c], axis = 0)
-#         prototypes[c].append(p_mean)
-#         prot_std[c].append(p_std)
-
-#     return prototypes,prot_std
-
-# Statistics
-statistics_path = './statistics/OnlineProtoNet_DeepConvLSTM_Opportunity.pkl'
-
-if not os.path.exists(os.path.dirname(statistics_path)):
-    os.makedirs(os.path.dirname(statistics_path))
-statistics_container = StatisticsContainer(statistics_path)
 
 
 labels = np.argmax(embeddings_list['labels'],axis=1)
@@ -387,7 +487,6 @@ colors = [cm((1.*i)/NUM_COLORS) for i in np.arange(NUM_COLORS)]
 
 pca = PCA(n_components=2)
 pca.fit(embeddings_list['embeddings'])
-
 prototypes_pca = pca.transform(list(prot_mem.prototypes.values()))
 
 fig, ax = plt.subplots(figsize=(10,10))
@@ -427,71 +526,102 @@ print(xdata, ydata, ytrue)
 plt_dynamic(np.array(xdata), np.array(ydata), ytrue, ax, colors)
 annotate = True
 plt.show(block=False)
+
+
+
+"""
+model adaptation with streaming data 
+update model after N time steps
+at every time step, prototype updated using online averaging
+Assume ground truth is given
+"""
+
+N = 20
+
 #sys.exit()
-model.eval()
-val_h = model.init_hidden(1)
-counter = 1
+model.set_memory(prot_mem)
+val_h = model.extractor.init_hidden(N)
+counter = 0
 xdata, ydata, ytrue = [], [], []
 embeddings=[]
 ll=[]
-
-def compute_euclidean(query, proto):
-    x = query.unsqueeze(1).expand(query.size(0),proto.size(0),query.size(1))
-    y = proto.unsqueeze(0).expand(query.size(0),proto.size(0),query.size(1))
-
-    return torch.pow(x-y,2).sum(2)
-
 print("Started Streaming Data ...")
-iteration = 0
+support_set = []
+labels_set = []
+map_labels = []
+counter = 1
 while not dataHandler.endOfStream():
     #print(counter)
     d, l = dataHandler.getNextData()
-    with torch.no_grad():
-        d = torch.from_numpy(np.array(d)).float()
-        d = d.cuda()
-        #l = l.cuda()
+    #d = torch.from_numpy(np.array(d)).float()
+    #d = d.cuda()
+    #l = l.cuda()
+    support_set.append(d)
+    labels_set.append(l)
+    map_labels.append(mapping[l])
+    model.train()
+
+    if counter % N == 0:
+        support_set = torch.from_numpy(np.array(support_set)).float().cuda()
+        map_labels = tf.keras.utils.to_categorical(map_labels, num_classes=baseClassesNb, dtype='int32')
+
+        labels_set = torch.from_numpy(np.array(labels_set)).float().cuda()
+        map_labels = torch.from_numpy(np.array(map_labels)).float().cuda()
         val_h = tuple([each.data for each in val_h])
         #print(np.shape(val_h[0]), np.shape(val_input))        
+        # zero the parameter gradients
+        optimizer.zero_grad()
 
-        yhat, val_h, embedding = model(d, val_h, 1)
-        embeddings.append(embedding.data.cpu().numpy().flatten())
-        #print(np.shape(embeddings))
-        ll.append(l)
+        log_p = model.forward_online(support_set,labels_set, support_set, val_h)
+        loss = F.binary_cross_entropy(log_p, map_labels)
+        loss.backward()
+        optimizer.step()
+        support_set = []
+        labels_set = []
+        map_labels = []
 
-        #upd_prot = pca.transform(prot_mem.prototypes[l][-1].reshape((-1,1))).flatten()
 
-        if counter % 20 == 0:
-            prot_mem.update_prototypes(embeddings,np.array(ll))
-            ## extract training embeddings
-            tr_h = model.init_hidden(BATCH_SIZE) 
+        eval_output = []
+        true_output = []
+        test_output = []
+        true_test_output = []
+        h = model.extractor.init_hidden(BATCH_SIZE)
+        #print(np.shape(val_h[0]))        
 
-            model.eval()
-            embeddings_list = dict()
-            embeddings_list['embeddings'] = []
-            embeddings_list['labels'] = []
+        model.eval()
+        with torch.no_grad():
 
-            with torch.no_grad():
+            for d in test_loader:
+                inputs, labels = d
+                #print(labels)
+                inputs = inputs.cuda()
+                labels = labels.cuda()
 
-                for tr_input, y_tr in test_loader:
-                    tr_h = tuple(each.data for each in tr_h)
+                h = tuple([each.data for each in h])
 
-                    tr_input = torch.from_numpy(np.array(tr_input)).float()
-                    tr_input = tr_input.cuda()
-                    y_tr = y_tr.cuda()
+                #print(np.shape(x_support), np.shape(x_query))
+                # zero the parameter gradients
 
-                    yhat, tr_h, embedding = model(tr_input, tr_h, BATCH_SIZE)
-                    embeddings_list['embeddings'].extend(embedding.data.cpu().numpy())
-                    embeddings_list['labels'].extend(y_tr.data.cpu().numpy())
+                #print(np.shape(labels))
+                log_p = model.forward_online(inputs,labels,inputs,h)
+                #print(log_p, y_query)
+                #clipwise_output = model(inputs,inputs.shape[0])
+                #print("....",np.shape(clipwise_output))
+                #clipwise_output = outputs['clipwise_output']
+                test_loss = F.binary_cross_entropy(log_p, labels)
 
-            logits = compute_euclidean(torch.from_numpy(np.array(embeddings_list['embeddings'])).float(),torch.from_numpy(np.array(list(prot_mem.prototypes.values()))).float())
-            pred = F.softmax(-logits, dim=1)   
-            test_loss = F.binary_cross_entropy(pred, torch.from_numpy(np.array(embeddings_list['labels'])))
+                test_output.append(log_p.data.cpu().numpy())
+                true_test_output.append(labels.data.cpu().numpy())
 
-            test_oo = np.argmax(pred, axis = 1)
-            true_test_oo = np.argmax(embeddings_list['labels'], axis=1).reshape((-1,1))
+            test_oo = np.argmax(np.vstack(test_output), axis = 1)
+            true_test_oo = np.argmax(np.vstack(true_test_output), axis = 1)
 
             accuracy = metrics.accuracy_score(true_test_oo, test_oo)
             precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, average='weighted')
+            try:
+                auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output), average="weighted")
+            except ValueError:
+                auc_test = None
             print('Test loss: {}'.format(test_loss))
             print('TEST average_precision: {}'.format(precision))
             print('TEST average f1: {}'.format(fscore))
@@ -505,17 +635,16 @@ while not dataHandler.endOfStream():
             test_f1 = {'test_f1':fscore}
             statistics_container.append(iteration, test_f1, data_type='test_f1')
             statistics_container.dump()
+        #print(prot_mem.prototypes)
+        xdata.extend(list(pca.transform(list(prot_mem.prototypes.values()))[:,0]))
+        ydata.extend(list(pca.transform(list(prot_mem.prototypes.values()))[:,1]))
+        ytrue.extend(np.array(list(prot_mem.prototypes.keys())).astype(int))
+        #print(k, xdata[-1],ydata[-1])
 
-            #print(prot_mem.prototypes)
-            xdata.extend(list(pca.transform(list(prot_mem.prototypes.values()))[:,0]))
-            ydata.extend(list(pca.transform(list(prot_mem.prototypes.values()))[:,1]))
-            ytrue.extend(np.array(list(prot_mem.prototypes.keys())).astype(int))
-            #print(k, xdata[-1],ydata[-1])
-
-            plt_dynamic(np.array(xdata).T, np.array(ydata).T, ytrue, ax, colors)  
-            iteration += 1     
+        plt_dynamic(np.array(xdata).T, np.array(ydata).T, ytrue, ax, colors)        
     counter += 1
-#plt.show()
+
+
 plotCNNStatistics(statistics_path)
 shutil.rmtree('./statistics')
 plt.show()

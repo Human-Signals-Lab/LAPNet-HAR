@@ -43,7 +43,7 @@ from torch.utils.data import TensorDataset
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
 from data_handler import *
 import shutil
-from prototype_memory_v2 import *
+from prototype_memory import *
 
 
 def plotCNNStatistics(statistics_path):
@@ -87,7 +87,7 @@ def plotCNNStatistics(statistics_path):
     ax.yaxis.set_ticks(np.arange(0, 1.01, 0.05))
     ax.yaxis.set_ticklabels(np.around(np.arange(0, 1.01, 0.05), decimals=2))        
     plt.ylabel('Test Average Fscore')
-    
+
 def plot_confusion_matrix(cm, class_list,
                           normalize=False,
                           title='Confusion matrix',

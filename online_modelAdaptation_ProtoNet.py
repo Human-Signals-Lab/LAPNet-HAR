@@ -43,7 +43,7 @@ from torch.utils.data import TensorDataset
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
 from data_handler import *
 import shutil
-from prototype_memory_v2 import *
+from prototype_memory import *
 from proto_net import *
 
 

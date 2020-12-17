@@ -15,7 +15,7 @@ import torch.utils.checkpoint as cp
 from torch.nn.parameter import Parameter
 import datetime
 import _pickle as cPickle
-from prototype_memory_v2 import *
+from prototype_memory import *
 
 class ProtoNet(nn.Module):
 

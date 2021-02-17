@@ -13,6 +13,7 @@ import matplotlib.pyplot as plt
 import itertools
 import csv
 from sklearn.decomposition import PCA
+from inc_pca import IncPCA
 
 from sklearn import metrics
 from enum import Enum
@@ -568,10 +569,6 @@ with torch.no_grad():
         embeddings_list['embeddings'].extend(embeddings.data.cpu().numpy())
         embeddings_list['labels'].extend(y_tr.data.cpu().numpy())
 
-### plot prototypes before updating
-pca = PCA(n_components=2)
-pca.fit(embeddings_list['embeddings'])
-
 cm = plt.get_cmap('gist_rainbow')
 NUM_COLORS = len(classes)
 
@@ -628,7 +625,9 @@ model.update_protoMemory(z_proto,labels)
 
 ## visualization after updating prototypes
 
-
+### plot prototypes before updating
+pca = IncPCA(n_components=2)
+pca.partial_fit(list(model.memory.prototypes.values()))
 #prototypes_pca = pca.transform(list(prot_mem.prototypes.values()))
 prototypes_pca = pca.transform(list(model.memory.prototypes.values()))
 
@@ -1053,8 +1052,12 @@ while not dataHandler.endOfStream():
             statistics_container.append(iteration, test_f1, data_type='test_f1')
             statistics_container.dump()
         #print(prot_mem.prototypes)
-        xdata.extend(list(pca.transform(list(model.memory.prototypes.values()))[:,0]))
-        ydata.extend(list(pca.transform(list(model.memory.prototypes.values()))[:,1]))
+        pca.partial_fit(list(model.memory.prototypes.values()))
+        next_pca = pca.transform(list(model.memory.prototypes.values()))
+        pca_geom = IncPCA.geom_trans(prototypes_pca, next_pca)
+        prototypes_pca = copy.deepcopy(pca_geom)
+        xdata.extend(list(pca_geom[:,0]))
+        ydata.extend(list(pca_geom[:,1]))
         ytrue.extend(list(model.memory.prototypes.keys()))
         # embx_data.extend(list(pca.transform(sub_embeddings['embeddings'])[:,0]))
         # emby_data.extend(list(pca.transform(sub_embeddings['embeddings'])[:,1]))
@@ -1071,85 +1074,39 @@ while not dataHandler.endOfStream():
 
 plotCNNStatistics(statistics_path)
 shutil.rmtree('./statistics')
-plt.show()
 
 
 
 
 #### visualize final prototypes after streaming data 
 
-
+ipca = IncPCA(2)
+ipca.partial_fit(prototypes_check)
+before_prot = ipca.transform(prototypes_check)
+after_prot = ipca.transform(list(model.memory.prototypes.values()))
+after_prot = IncPCA.geom_trans(before_prot, after_prot)
 plt.figure(figsize=(10,10))
-prot_pca_all = pca.fit_transform(list(model.memory.prototypes.values()))
-emb_pca = pca.transform(embeddings_list['embeddings'])
-emb_labels = np.argmax(np.array(embeddings_list['labels']),axis=1)
-emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
 
 ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
 for k, col in zip(np.unique(ll), colors):
     #print(k, np.shape(test_embd_pca[y_pred==k,0]))
-    plt.plot(prot_pca_all[ll==k,0], prot_pca_all[ll==k,1], 'o',
+    plt.plot(before_prot[ll==k,0], before_prot[ll==k,1], 'o',
             markerfacecolor=col, markeredgecolor=col,
              marker=markers[k%len(markers)],markersize=7)
 
-    # plt.plot(emb_pca[emb_labels==k,0], emb_pca[emb_labels==k,1], 'o',
-    #         markerfacecolor=col, markeredgecolor=col,
-    #          marker=markers[k%len(markers)],markersize=7)
-
-    #add label
-    plt.annotate(LABELS[list(mapping.keys())[k]], (prot_pca_all[k,0], prot_pca_all[k,1]),
-                 horizontalalignment='center',
-                 verticalalignment='center',
-                 size=10, weight='bold',rotation=45,
-                 color='k')
-plt.title("Prototypes after model adaptation")
-
-plt.figure(figsize=(10,10))
-prot_before = pca.fit_transform(prototypes_check)
-
-ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
-for k, col in zip(np.unique(ll), colors):
-    #print(k, np.shape(test_embd_pca[y_pred==k,0]))
-    plt.plot(prot_before[ll==k,0], prot_before[ll==k,1], 'o',
-            markerfacecolor=col, markeredgecolor=col,
-             marker=markers[k%len(markers)],markersize=7)
-
-    # plt.plot(emb_pca[emb_labels==k,0], emb_pca[emb_labels==k,1], 'o',
-    #         markerfacecolor=col, markeredgecolor=col,
-    #          marker=markers[k%len(markers)],markersize=7)
-
-    #add label
-    plt.annotate(LABELS[list(mapping.keys())[k]], (prot_before[k,0], prot_before[k,1]),
-                 horizontalalignment='center',
-                 verticalalignment='center',
-                 size=10, weight='bold',rotation=45,
-                 color='k')
-plt.title("Prototypes before model adaptation")
-#plt.show()
-
-
-plt.figure(figsize=(10,10))
-emb_pca = pca.fit_transform(embeddings_list['embeddings'])
-emb_labels = np.argmax(np.array(embeddings_list['labels']),axis=1)
-emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
-emb_pca = emb_pca.data.cpu().numpy()
-emb_labels = emb_labels.data.cpu().numpy().astype(int)
-
-for k, col in zip(np.unique(emb_labels), colors):
-    #print(k, np.shape(test_embd_pca[y_pred==k,0]))
-
-    plt.plot(emb_pca[emb_labels==k,0], emb_pca[emb_labels==k,1], 'o',
+    plt.plot(after_prot[ll==k,0], after_prot[ll==k,1], 'o',
             markerfacecolor=col, markeredgecolor=col,
              marker=markers[k%len(markers)],markersize=7)
 
     #add label
-    plt.annotate(LABELS[list(mapping.keys())[k]], (np.mean(emb_pca[emb_labels==k,0],axis=0), np.mean(emb_pca[emb_labels==k,1],axis=0)),
+    plt.annotate(LABELS[list(mapping.keys())[k]], (before_prot[k,0], before_prot[k,1]),
                  horizontalalignment='center',
                  verticalalignment='center',
                  size=10, weight='bold',rotation=45,
                  color='k')
-plt.title("All Training Embeddings after model adaptation (ground truth labeling)")
+plt.title("Prototypes before and after model adaptation")
+
+
 plt.show()
-
 
 

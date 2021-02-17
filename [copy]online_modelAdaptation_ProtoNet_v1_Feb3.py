@@ -73,18 +73,18 @@ def plotCNNStatistics(statistics_path):
     lines.append(line)
 
 
-    #ax.set_ylim(0, 1.)
+    ax.set_ylim(0, 1.)
     #ax.set_xlim(0, len(iterations))
     #ax.xaxis.set_ticks(np.arange(0, len(iterations), 25))
     #ax.xaxis.set_ticklabels(np.arange(0, max_plot_iteration, 50000))
-    #ax.yaxis.set_ticks(np.arange(0, 1.01, 0.05))
-    #ax.yaxis.set_ticklabels(np.around(np.arange(0, 1.01, 0.05), decimals=2))        
+    ax.yaxis.set_ticks(np.arange(0, 1.01, 0.05))
+    ax.yaxis.set_ticklabels(np.around(np.arange(0, 1.01, 0.05), decimals=2))        
     ax.grid(color='b', linestyle='solid', linewidth=0.3)
     plt.legend(labels=['Training Loss','Testing Loss'], loc=2)
 
     fig, ax = plt.subplots(1, 1, figsize=(15, 8))
     line, = ax.plot(test_f1, color='r', alpha=test_alpha)
-    #ax.set_ylim(0,1.)
+    ax.set_ylim(0,1.)
     ax.yaxis.set_ticks(np.arange(0, 1.01, 0.05))
     ax.yaxis.set_ticklabels(np.around(np.arange(0, 1.01, 0.05), decimals=2))        
     plt.ylabel('Test Average Fscore')
@@ -317,7 +317,7 @@ classes = np.unique(y_test_segments)
 
 ## streaming data
 baseClassesNb = 5
-percentage = .05  #.2 #.05 # 20%
+percentage = .05 # 20%
 dataHandler = DataHandler(nb_baseClasses=baseClassesNb, seed=0, train={'data':X_train,'label':y_train_segments}, ClassPercentage=percentage)
 dataHandler.streaming_data()
 baseData = dataHandler.getBaseData()
@@ -432,8 +432,7 @@ for epoch in range(n_epochs):
     test_output = []
     true_test_output = []
     #h = model.extractor.init_hidden(n_support*baseClassesNb)
-    #val_h = model.extractor.init_hidden(n_support*baseClassesNb)
-    val_h = model.extractor.init_hidden(BATCH_SIZE)
+    val_h = model.extractor.init_hidden(n_support*baseClassesNb)
 
     #print(np.shape(val_h[0]))        
 
@@ -447,52 +446,52 @@ for epoch in range(n_epochs):
 
             inputs, labels = d
             #print(labels)
-            # x_support, y_support, x_query, y_query = extract_sample(baseClassesNb, n_support, n_support, inputs, np.argmax(labels, axis = 1), seed = iteration,shuffle=False)
-            # x_support = x_support.cuda()
-            # y_support = tf.keras.utils.to_categorical(y_support, num_classes=baseClassesNb, dtype='int32')
-            # y_support = torch.from_numpy(y_support).float().cuda()
-            # x_query = x_query.cuda()
-            # y_query = tf.keras.utils.to_categorical(y_query, num_classes=baseClassesNb, dtype='int32')
-            # y_query = torch.from_numpy(y_query).float().cuda()
-            # h = tuple([each.data for each in h])
-
-            # #print(np.shape(x_support), np.shape(x_query))
-            # # zero the parameter gradients
-
-            # #print(np.shape(labels))
-            # log_p,h = model.forward_offline(x_support,y_support,x_query,h)
-            # #print(log_p, y_query)
-            # #clipwise_output = model(inputs,inputs.shape[0])
-            # #print("....",np.shape(clipwise_output))
-            # #clipwise_output = outputs['clipwise_output']
-            # test_loss = F.binary_cross_entropy(log_p, y_query)
-
-            # test_output.append(log_p.data.cpu().numpy())
-            # true_test_output.append(y_query.data.cpu().numpy())
-
-####### Testing without selecting random support ########################################################################
-            inputs , labels = order_classes(inputs,np.argmax(labels, axis = 1),iteration)
-            labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
-            labels = torch.from_numpy(labels).float()
-            inputs = inputs.cuda()
-            #labels = torch.from_numpy(tf.keras.utils.to_categorical(np.argmax(labels, axis = 1), num_classes=baseClassesNb, dtype='int32')).float()
-            labels = labels.cuda()
-
-            val_h = tuple([each.data for each in val_h])
+            x_support, y_support, x_query, y_query = extract_sample(baseClassesNb, n_support, n_support, inputs, np.argmax(labels, axis = 1), seed = iteration,shuffle=False)
+            x_support = x_support.cuda()
+            y_support = tf.keras.utils.to_categorical(y_support, num_classes=baseClassesNb, dtype='int32')
+            y_support = torch.from_numpy(y_support).float().cuda()
+            x_query = x_query.cuda()
+            y_query = tf.keras.utils.to_categorical(y_query, num_classes=baseClassesNb, dtype='int32')
+            y_query = torch.from_numpy(y_query).float().cuda()
+            h = tuple([each.data for each in h])
 
             #print(np.shape(x_support), np.shape(x_query))
             # zero the parameter gradients
 
             #print(np.shape(labels))
-            log_p,val_h = model.forward_offline(inputs,labels,inputs,val_h)
+            log_p,h = model.forward_offline(x_support,y_support,x_query,h)
             #print(log_p, y_query)
             #clipwise_output = model(inputs,inputs.shape[0])
             #print("....",np.shape(clipwise_output))
             #clipwise_output = outputs['clipwise_output']
-            test_loss = F.binary_cross_entropy(log_p, labels)
+            test_loss = F.binary_cross_entropy(log_p, y_query)
 
             test_output.append(log_p.data.cpu().numpy())
-            true_test_output.append(labels.data.cpu().numpy())
+            true_test_output.append(y_query.data.cpu().numpy())
+
+####### Testing without selecting random support ########################################################################
+            # inputs , labels = order_classes(inputs,np.argmax(labels, axis = 1),iteration)
+            # labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
+            # labels = torch.from_numpy(labels).float()
+            # inputs = inputs.cuda()
+            # #labels = torch.from_numpy(tf.keras.utils.to_categorical(np.argmax(labels, axis = 1), num_classes=baseClassesNb, dtype='int32')).float()
+            # labels = labels.cuda()
+
+            # val_h = tuple([each.data for each in val_h])
+
+            # #print(np.shape(x_support), np.shape(x_query))
+            # # zero the parameter gradients
+
+            # #print(np.shape(labels))
+            # log_p,val_h = model.forward_offline(inputs,labels,inputs,val_h)
+            # #print(log_p, y_query)
+            # #clipwise_output = model(inputs,inputs.shape[0])
+            # #print("....",np.shape(clipwise_output))
+            # #clipwise_output = outputs['clipwise_output']
+            # test_loss = F.binary_cross_entropy(log_p, labels)
+
+            # test_output.append(log_p.data.cpu().numpy())
+            # true_test_output.append(labels.data.cpu().numpy())
             running_test_loss += test_loss
             n_steps += 1
 ##########################################################################################################################
@@ -516,11 +515,8 @@ for epoch in range(n_epochs):
         print('TEST auc: {}'.format(accuracy))
 
         trainLoss = {'Trainloss': epoch_train_loss}
-        #trainLoss = {'Trainloss': loss}
-
         statistics_container.append(iteration, trainLoss, data_type='Trainloss')
         testLoss = {'Testloss': epoch_test_loss}
-        #testLoss = {'Testloss': test_loss}
         statistics_container.append(iteration, testLoss, data_type='Testloss')
         test_f1 = {'test_f1':fscore}
         statistics_container.append(iteration, test_f1, data_type='test_f1')
@@ -642,7 +638,7 @@ xdata.extend(prototypes_pca[:,0])
 ydata.extend(prototypes_pca[:,1])
 annotations= set()
 
-def plt_dynamic(x,y,labels,ax,fig,colors,markers=['.',  'x', 'h','1']):
+def plt_dynamic(x,y,labels,ax,colors,markers=['.',  'x', 'h','1']):
     #print(x,y,labels,x[labels==6],y[labels==6])
     for k, col in zip(np.unique(labels),colors):
         #print(k,x,y,labels)
@@ -652,8 +648,8 @@ def plt_dynamic(x,y,labels,ax,fig,colors,markers=['.',  'x', 'h','1']):
         marker=markers[k%len(markers)],markersize=20) 
 
         #add label
-        if annotate and LABELS[list(mapping.keys())[k]] not in annotations:
-            annotations.add(LABELS[list(mapping.keys())[k]])
+        if annotate and LABELS[k] not in annotations:
+            annotations.add(LABELS[k])
             ax.annotate(LABELS[list(mapping.keys())[k]], (xx, yy),
                      horizontalalignment='center',
                      verticalalignment='center',
@@ -666,7 +662,7 @@ def plt_dynamic(x,y,labels,ax,fig,colors,markers=['.',  'x', 'h','1']):
 ytrue = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
 annotate = True
 print(xdata, ydata, ytrue)
-plt_dynamic(np.array(xdata), np.array(ydata), ytrue, ax,fig, colors)
+plt_dynamic(np.array(xdata), np.array(ydata), ytrue, ax, colors)
 plt.title("Prototypes after updating using all training data")
 annotate = True
 plt.show(block=False)
@@ -680,7 +676,7 @@ Assume ground truth is given
 """
 
 N = 20
-#N = 100
+
 #sys.exit()
 #model.set_memory(prot_mem)
 
@@ -850,20 +846,8 @@ support_set = []
 labels_set = []
 map_labels = []
 counter = 1
-#running_loss = 0.0
+running_loss = 0.0
 n_steps = 0
-# embeddings_pca = pca.transform(embeddings_list['embeddings'])
-# fig1, ax1 = plt.subplots(figsize=(10,10))
-# # ax.set_xlim(-6,6)
-# # ax.set_ylim(-6,6)
-# ln1, = plt.plot([],[],'ro')
-# embx_data, emby_data, embyTrue = embeddings_pca[:,0], embeddings_pca[:,1], np.array(np.argmax(embeddings_list['labels'],axis=1))
-# annotate = True
-# plt_dynamic(np.array(embx_data), np.array(emby_data), embyTrue, ax1,fig1, colors)
-# plt.title("BaseData Embeddings during Model Adaptation")
-# annotate = True
-# plt.show(block=False)
-embx_data, emby_data, embyTrue = [], [], []
 while not dataHandler.endOfStream():
     #print(counter)
     d, l = dataHandler.getNextData()
@@ -893,10 +877,10 @@ while not dataHandler.endOfStream():
         optimizer.zero_grad()
 
         log_p, val_h,embds = model.forward_online(support_set,map_labels, support_set, val_h)
-        #embeddings_list['embeddings'].extend(embds.data.cpu().numpy())
-        #embeddings_list['labels'].extend(map_labels.data.cpu().numpy())
+        embeddings_list['embeddings'].extend(embds.data.cpu().numpy())
+        embeddings_list['labels'].extend(map_labels.data.cpu().numpy())
         loss = F.binary_cross_entropy(log_p, map_labels)    
-        #running_loss += loss
+        running_loss += loss
         loss.backward()
         optimizer.step()
         support_set = []
@@ -908,9 +892,7 @@ while not dataHandler.endOfStream():
         true_output = []
         test_output = []
         true_test_output = []
-        #h = model.extractor.init_hidden(n_support*baseClassesNb)
-        h = model.extractor.init_hidden(BATCH_SIZE)
-
+        h = model.extractor.init_hidden(n_support*baseClassesNb)
         #print(np.shape(val_h[0]))        
 
         model.eval()
@@ -921,111 +903,58 @@ while not dataHandler.endOfStream():
             for d in test_loader:
                 inputs, labels = d
                 #print(labels)
-                inputs , labels = order_classes(inputs,np.argmax(labels, axis = 1),iteration)
-                labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
-                labels = torch.from_numpy(labels).float()
+                # inputs , labels = order_classes(inputs,np.argmax(labels, axis = 1),iteration)
+                # labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
+                # labels = torch.from_numpy(labels).float()
 
-                inputs = inputs.cuda()
-                labels = labels.cuda()
+                # inputs = inputs.cuda()
+                # labels = labels.cuda()
 
-                h = tuple([each.data for each in h])
-
-                #print(np.shape(x_support), np.shape(x_query))
-                # zero the parameter gradients
-
-                #print(np.shape(labels))
-                log_p, h = model.forward_online(inputs,labels,inputs,h)
-                #print(log_p, y_query)
-                #clipwise_output = model(inputs,inputs.shape[0])
-                #print("....",np.shape(clipwise_output))
-                #clipwise_output = outputs['clipwise_output']
-                test_loss = F.binary_cross_entropy(log_p, labels)
-                running_test_loss += test_loss
-
-                test_output.append(log_p.data.cpu().numpy())
-                true_test_output.append(labels.data.cpu().numpy())
-                n_test_steps += 1
-
-
-            ######################################################################################################################################3
-                # x_support, y_support, x_query, y_query = extract_sample(baseClassesNb, n_support, n_support, inputs, np.argmax(labels, axis = 1), seed = iteration,shuffle=False)
-                # x_support = x_support.cuda()
-                # y_support = tf.keras.utils.to_categorical(y_support, num_classes=baseClassesNb, dtype='int32')
-                # y_support = torch.from_numpy(y_support).float().cuda()
-                # x_query = x_query.cuda()
-                # y_query = tf.keras.utils.to_categorical(y_query, num_classes=baseClassesNb, dtype='int32')
-                # y_query = torch.from_numpy(y_query).float().cuda()
                 # h = tuple([each.data for each in h])
 
                 # #print(np.shape(x_support), np.shape(x_query))
                 # # zero the parameter gradients
 
                 # #print(np.shape(labels))
-                # log_p,h = model.forward_inference(x_support,y_support,x_query,h)
+                # log_p, h = model.forward_online(inputs,labels,inputs,h)
                 # #print(log_p, y_query)
                 # #clipwise_output = model(inputs,inputs.shape[0])
                 # #print("....",np.shape(clipwise_output))
                 # #clipwise_output = outputs['clipwise_output']
-                # test_loss = F.binary_cross_entropy(log_p, y_query)
+                # test_loss = F.binary_cross_entropy(log_p, labels)
                 # running_test_loss += test_loss
 
                 # test_output.append(log_p.data.cpu().numpy())
-                # true_test_output.append(y_query.data.cpu().numpy())
-                # n_test_steps += 1  
+                # true_test_output.append(labels.data.cpu().numpy())
+                # n_test_steps += 1
 
-            running_loss1 = 0.0
-            n_steps = 0
-            train_output = []
-            true_train_output = []
-            h = model.extractor.init_hidden(BATCH_SIZE)
-            sub_embeddings = {'embeddings':[],'labels': []}
-            for d in train_loader:
-                inputs, labels = d
-                inputs, labels = order_classes(inputs, np.argmax(labels,axis = 1),iteration)
-                labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
-                labels = torch.from_numpy(labels).float()      
-                inputs = inputs.cuda()
-                labels = labels.cuda()
 
+            ######################################################################################################################################3
+                x_support, y_support, x_query, y_query = extract_sample(baseClassesNb, n_support, n_support, inputs, np.argmax(labels, axis = 1), seed = iteration,shuffle=False)
+                x_support = x_support.cuda()
+                y_support = tf.keras.utils.to_categorical(y_support, num_classes=baseClassesNb, dtype='int32')
+                y_support = torch.from_numpy(y_support).float().cuda()
+                x_query = x_query.cuda()
+                y_query = tf.keras.utils.to_categorical(y_query, num_classes=baseClassesNb, dtype='int32')
+                y_query = torch.from_numpy(y_query).float().cuda()
                 h = tuple([each.data for each in h])
 
                 #print(np.shape(x_support), np.shape(x_query))
                 # zero the parameter gradients
 
                 #print(np.shape(labels))
-                _,h,embeddings = model.extractor(inputs, h, BATCH_SIZE)
-                embeddings_list['embeddings'].extend(embeddings.data.cpu().numpy())
-                embeddings_list['labels'].extend(labels.data.cpu().numpy())
-                sub_embeddings['embeddings'].extend(embeddings.data.cpu().numpy())
-                sub_embeddings['labels'].extend(labels.data.cpu().numpy())
-
-                log_p,h = model.forward_online(inputs,labels,inputs,h)
-                #assert prototypes_check == list(model.memory.prototypes.values())
+                log_p,h = model.forward_inference(x_support,y_support,x_query,h)
                 #print(log_p, y_query)
                 #clipwise_output = model(inputs,inputs.shape[0])
                 #print("....",np.shape(clipwise_output))
                 #clipwise_output = outputs['clipwise_output']
-                train_loss = F.binary_cross_entropy(log_p, labels)
-                running_loss1 += train_loss
-                n_steps += 1
-                train_output.append(log_p.data.cpu().numpy())
-                true_train_output.append(labels.data.cpu().numpy())
+                test_loss = F.binary_cross_entropy(log_p, y_query)
+                running_test_loss += test_loss
 
-            train_oo = np.argmax(np.vstack(train_output), axis = 1)
-            true_train_oo = np.argmax(np.vstack(true_train_output), axis = 1)
-
-            accuracy = metrics.accuracy_score(true_train_oo, train_oo)
-            precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_train_oo, train_oo, average='weighted')
-            try:
-                auc_test = metrics.roc_auc_score(np.vstack(true_train_output), np.vstack(train_output), average="weighted")
-            except ValueError:
-                auc_test = None
-            epoch_loss = running_loss1 / n_steps
-            print('Train loss: {}'.format(epoch_loss))
-            print('TRAIN average_precision: {}'.format(precision))
-            print('TRAIN average f1: {}'.format(fscore))
-            print('TRAIN average recall: {}'.format(recall))
-            print('TRAIN auc: {}'.format(accuracy))                
+                test_output.append(log_p.data.cpu().numpy())
+                true_test_output.append(y_query.data.cpu().numpy())
+                n_test_steps += 1  
+                
 
             test_oo = np.argmax(np.vstack(test_output), axis = 1)
             true_test_oo = np.argmax(np.vstack(true_test_output), axis = 1)
@@ -1042,12 +971,9 @@ while not dataHandler.endOfStream():
             print('TEST average recall: {}'.format(recall))
             print('TEST auc: {}'.format(accuracy))
 
-            trainLoss = {'Trainloss': running_loss1 / n_steps}
-            #trainLoss = {'Trainloss': loss}
+            trainLoss = {'Trainloss': running_loss / n_steps}
             statistics_container.append(iteration, trainLoss, data_type='Trainloss')
             testLoss = {'Testloss': running_test_loss / n_test_steps}
-            #testLoss = {'Testloss': test_loss}
-
             statistics_container.append(iteration, testLoss, data_type='Testloss')
             test_f1 = {'test_f1':fscore}
             statistics_container.append(iteration, test_f1, data_type='test_f1')
@@ -1056,13 +982,9 @@ while not dataHandler.endOfStream():
         xdata.extend(list(pca.transform(list(model.memory.prototypes.values()))[:,0]))
         ydata.extend(list(pca.transform(list(model.memory.prototypes.values()))[:,1]))
         ytrue.extend(list(model.memory.prototypes.keys()))
-        # embx_data.extend(list(pca.transform(sub_embeddings['embeddings'])[:,0]))
-        # emby_data.extend(list(pca.transform(sub_embeddings['embeddings'])[:,1]))
-        # embyTrue.extend(np.argmax(sub_embeddings['labels'],axis=1))
         #print(k, xdata[-1],ydata[-1])
 
-        plt_dynamic(np.array(xdata).T, np.array(ydata).T, ytrue, ax,fig, colors) 
-        #plt_dynamic(np.array(embx_data).T, np.array(emby_data).T, embyTrue, ax1,fig1, colors)
+        plt_dynamic(np.array(xdata).T, np.array(ydata).T, ytrue, ax, colors) 
         # if counter > 40:
         #     break       
     counter += 1
@@ -1103,28 +1025,6 @@ for k, col in zip(np.unique(ll), colors):
                  size=10, weight='bold',rotation=45,
                  color='k')
 plt.title("Prototypes after model adaptation")
-
-plt.figure(figsize=(10,10))
-prot_before = pca.fit_transform(prototypes_check)
-
-ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
-for k, col in zip(np.unique(ll), colors):
-    #print(k, np.shape(test_embd_pca[y_pred==k,0]))
-    plt.plot(prot_before[ll==k,0], prot_before[ll==k,1], 'o',
-            markerfacecolor=col, markeredgecolor=col,
-             marker=markers[k%len(markers)],markersize=7)
-
-    # plt.plot(emb_pca[emb_labels==k,0], emb_pca[emb_labels==k,1], 'o',
-    #         markerfacecolor=col, markeredgecolor=col,
-    #          marker=markers[k%len(markers)],markersize=7)
-
-    #add label
-    plt.annotate(LABELS[list(mapping.keys())[k]], (prot_before[k,0], prot_before[k,1]),
-                 horizontalalignment='center',
-                 verticalalignment='center',
-                 size=10, weight='bold',rotation=45,
-                 color='k')
-plt.title("Prototypes before model adaptation")
 #plt.show()
 
 

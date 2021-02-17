@@ -41,7 +41,7 @@ class PrototypeMemory():
                 self.prototypes[c] = p_mean.flatten()
                 self.counters[c] += new_count
             else:
-                print(self.prototypes.keys(), c)
+                #print(self.prototypes.keys(), c)
                 p_mean = X[y==c].mean(0)
                 #print(np.shape(X[y==c]))
                 self.prototypes[c] = list(p_mean.data.cpu().numpy().flatten())

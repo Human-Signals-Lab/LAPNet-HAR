@@ -46,6 +46,7 @@ import shutil
 from prototype_memory import *
 from proto_net import *
 from utils import *
+from losses import *
 import json
 import argparse
 
@@ -69,6 +70,7 @@ parser.add_argument('--window_length_WISDM', type=float, default=5.)
 parser.add_argument('--window_step_WISDM', type=float, default=2.5)
 parser.add_argument('--WISDM_device', type=str, default='phone')
 parser.add_argument('--window_length_HAPT', type=float, default=2.56)
+parser.add_argument('--DSoftmax', action='store_true', default=False)
 parser.add_argument('--seed', type=int, default=1)
 params = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"]=params.cuda_device
@@ -76,8 +78,12 @@ os.environ["CUDA_VISIBLE_DEVICES"]=params.cuda_device
 seed = params.seed
 torch.backends.cudnn.deterministic = True
 random.seed(seed)
-torch.manual_seed(1)
-torch.cuda.manual_seed(1)
+if params.data =='Skoda':
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+else:
+    torch.manual_seed(1)
+    torch.cuda.manual_seed(1)   
 np.random.seed(seed)
 
 if params.data == 'Opportunity':
@@ -390,8 +396,7 @@ Get Base Data and Streaming Data
 #     baseClassesNb = NUM_CLASSES
 baseClassesNb = params.baseClasses
 percentage = params.percentage #.05 # 20%
-
-dataHandler = DataHandler(nb_baseClasses=baseClassesNb, seed=seed, train={'data':X_train,'label':y_train_segments}, ClassPercentage=percentage)
+dataHandler = DataHandler(nb_baseClasses=baseClassesNb, seed=0, train={'data':X_train,'label':y_train_segments}, ClassPercentage=percentage)
 dataHandler.streaming_data(nb_NewClasses=params.newClasses)
 baseData = copy.deepcopy(dataHandler.getBaseData())
 baseClasses = np.unique(baseData['label'])
@@ -424,7 +429,7 @@ for x in range(len(y_test_select)):
     y_test_select[x] = mapping[y_test_select[x]]
 
 
-## select base classes in test data 
+## select new classes in test data 
 X_test_newClasses = []
 y_test_newClasses = []
 for c in NewClasses:
@@ -435,23 +440,44 @@ for c in NewClasses:
 for x in range(len(y_test_newClasses)):
     y_test_newClasses[x] = mapping[y_test_newClasses[x]]
 
+for x in range(len(y_test_segments)):
+    y_test_segments[x] = mapping[y_test_segments[x]]
+
+#import pdb; pdb.set_trace()
+y_test = tf.keras.utils.to_categorical(y_test_select, num_classes=baseClassesNb + newClassesNb, dtype='int32')
+y_test_newClasses_cat = tf.keras.utils.to_categorical(y_test_newClasses, num_classes=baseClassesNb + newClassesNb, dtype='int32')
+y_test_all = tf.keras.utils.to_categorical(y_test_segments, num_classes=baseClassesNb+newClassesNb, dtype='int32')
+
+baseClassesNb = NUM_CLASSES
+percentage = 1. #.05 # 20%
+dataHandler = DataHandler(nb_baseClasses=baseClassesNb, seed=0, train={'data':X_train,'label':y_train_segments}, ClassPercentage=percentage)
+dataHandler.streaming_data(nb_NewClasses=0)
+baseData = copy.deepcopy(dataHandler.getBaseData())
+baseClasses = np.unique(baseData['label'])
+for x in range(len(baseData['label'])):
+    baseData['label'][x] = mapping[baseData['label'][x]]
 
 y_train = tf.keras.utils.to_categorical(baseData['label'], num_classes=baseClassesNb, dtype='int32')
-y_test = tf.keras.utils.to_categorical(y_test_select, num_classes=baseClassesNb, dtype='int32')
-y_test_newClasses_cat = tf.keras.utils.to_categorical(y_test_newClasses, num_classes=baseClassesNb + newClassesNb, dtype='int32')
+
 
 #model = InceptionNN(NUM_CLASSES)
 extractor = DeepConvLSTM(n_classes=len(np.unique(baseData['label'])), NB_SENSOR_CHANNELS = NB_SENSOR_CHANNELS, SLIDING_WINDOW_LENGTH = SLIDING_WINDOW_LENGTH)
 model = ProtoNet(extractor,128,baseClassesNb)
 
+if params.DSoftmax:
+    D_softmax = DSoftmaxLoss(torch.Tensor([0.5]).float(), baseClassesNb)
 
 if torch.cuda.is_available():
     model.cuda()
 
 torch.backends.cudnn.deterministic = True
 random.seed(seed)
-torch.manual_seed(1)
-torch.cuda.manual_seed(1)
+if params.data =='Skoda':
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+else:
+    torch.manual_seed(1)
+    torch.cuda.manual_seed(1)   
 np.random.seed(seed)
 
 # Statistics
@@ -467,13 +493,16 @@ statistics_container = StatisticsContainer(statistics_path)
 x_train_tensor = torch.from_numpy(np.array(baseData['data'])).float()
 y_train_tensor = torch.from_numpy(np.array(y_train)).float()
 x_test_tensor = torch.from_numpy(np.array(X_test_select)).float()
+x_test_all_tensor = torch.from_numpy(np.array(X_test)).float()
 x_test_newclasses_tensor = torch.from_numpy(np.array(X_test_newClasses)).float()
 y_test_tensor = torch.from_numpy(np.array(y_test)).float()
 y_test_newClasses_tensor = torch.from_numpy(np.array(y_test_newClasses_cat)).float()
+y_test_all_tensor = torch.from_numpy(np.array(y_test_all)).float()
 
 train_data = TensorDataset(x_train_tensor, y_train_tensor)
 test_data = TensorDataset(x_test_tensor, y_test_tensor)
 test_newClasses_data = TensorDataset(x_test_newclasses_tensor, y_test_newClasses_tensor)
+test_data_all = TensorDataset(x_test_all_tensor, y_test_all_tensor)
 
 if params.data == 'WISDM':
     train_loader = torch.utils.data.DataLoader(dataset=train_data, 
@@ -486,7 +515,7 @@ else:
 test_loader = torch.utils.data.DataLoader(dataset=test_data, 
                         batch_size=BATCH_SIZE_VAL,
                         num_workers=1, pin_memory=True, shuffle = True,drop_last=False)
-
+test_all_loader = torch.utils.data.DataLoader(dataset=test_data_all, batch_size=BATCH_SIZE_VAL, num_workers=1, pin_memory=True, shuffle=True, drop_last=False)
 if newClassesNb > 1:
     test_newClasses_loader = torch.utils.data.DataLoader(dataset=test_newClasses_data, 
                             batch_size=BATCH_SIZE_VAL,
@@ -530,8 +559,7 @@ for epoch in range(n_epochs):
         # zero the parameter gradients
         optimizer.zero_grad()
 
-        log_p,h = model.forward_offline(x_support,y_support,x_query,h,query_h)
-
+        log_p,h = model.forward_offline(x_support,y_support,x_query,h,query_h, params.DSoftmax)
         key2idx = torch.empty(baseClassesNb,dtype=torch.long).cuda()
         proto_keys = list(model.memory.prototypes.keys())
         #import pdb; pdb.set_trace()
@@ -542,8 +570,12 @@ for epoch in range(n_epochs):
         y_query = key2idx[y_query].view(-1,1)
         y_query = tf.keras.utils.to_categorical(y_query.cpu().numpy(), num_classes=len(proto_keys), dtype='int32')
         y_query = torch.from_numpy(y_query).float().cuda()   
-        #print(np.argmax(log_p.data.cpu().numpy(),axis=1),np.argmax(y_query.data.cpu().numpy(),axis=1))
-        loss = F.binary_cross_entropy(log_p, y_query)
+            #print(np.argmax(log_p.data.cpu().numpy(),axis=1),np.argmax(y_query.data.cpu().numpy(),axis=1))
+        
+        if not params.DSoftmax:
+            loss = F.binary_cross_entropy(log_p, y_query)
+        else:
+            loss = D_softmax(log_p, y_query, model)
         running_loss += loss
         loss.backward()
         optimizer.step()
@@ -561,7 +593,7 @@ for epoch in range(n_epochs):
        
 
     model.eval()
-
+    model.extractor.eval()
     with torch.no_grad():
         print('TESTING !!')
         running_test_loss = 0.0
@@ -603,10 +635,11 @@ for epoch in range(n_epochs):
         test_oo = np.argmax(np.vstack(test_output), axis = 1)
         true_test_oo = np.argmax(np.vstack(true_test_output), axis = 1)
 
-        accuracy = metrics.accuracy_score(true_test_oo, test_oo)
-        precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, labels=np.unique(true_test_oo), average='weighted')
+        accuracy = metrics.accuracy_score(true_test_oo, test_oo,)
+        precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, labels=np.unique(true_test_oo), average='macro')
+
         try:
-            auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output), labels=np.unique(true_test_oo), average="weighted")
+            auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output),labels=np.unique(true_test_oo), average='macro' )
         except ValueError:
             auc_test = None
         epoch_test_loss = running_test_loss / n_steps
@@ -647,7 +680,7 @@ plotCNNStatistics(statistics_path)
 ## extract training embeddings
 
 model.eval()
-#model.extractor.eval()
+model.extractor.eval()
 embeddings_list = dict()
 embeddings_list['embeddings'] = []
 embeddings_list['labels'] = []
@@ -872,7 +905,7 @@ true_test_output = []
 #print(np.shape(val_h[0]))        
 
 model.eval()
-
+model.extractor.eval()
 with torch.no_grad():
     print('TESTING !!')
     running_test_loss = 0.0
@@ -912,9 +945,9 @@ with torch.no_grad():
     true_test_oo = np.argmax(np.vstack(true_test_output), axis = 1)
 
     accuracy = metrics.accuracy_score(true_test_oo, test_oo)
-    precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, labels=np.unique(true_test_oo), average='weighted')
+    precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, labels=np.unique(true_test_oo), average='macro')
     try:
-        auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output), labels=np.unique(true_test_oo), average="weighted")
+        auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output), labels=np.unique(true_test_oo), average='macro')
     except ValueError:
         auc_test = None
     epoch_test_loss = running_test_loss / n_steps
@@ -925,16 +958,157 @@ with torch.no_grad():
     print('FINAL TEST average recall: {}'.format(recall))
     print('FINAL TEST auc: {}'.format(accuracy))
 
-C = confusion_matrix(true_test_oo, test_oo)
+C = confusion_matrix(true_test_oo, test_oo, labels=np.unique(true_test_oo))
 
-#labels = np.argmax(embeddings_list['labels'],axis=1)
-labels = true_test_oo.copy()
-for i in range(len(true_test_oo)):
-    labels[i] = list(mapping.keys())[true_test_oo[i]]
+# #labels = np.argmax(embeddings_list['labels'],axis=1)
+# labels = true_test_oo.copy()
+# for i in range(len(true_test_oo)):
+#     labels[i] = list(mapping.keys())[true_test_oo[i]]
 
 plt.figure(figsize=(10,10))
-plot_confusion_matrix(C, class_list=np.unique(labels), normalize=True, title='FINAL Predicted Results')
+plot_confusion_matrix(C, class_list=np.unique(true_test_oo), normalize=True, title='FINAL Predicted Results')
 
+eval_output_newClass = []
+true_output_newClass = []
+test_output_newClass = []
+true_test_output_newClass = []
+model.eval()
+model.extractor.eval()
+with torch.no_grad():
+    print('TESTING !!')
+    running_test_loss = 0.0
+    n_steps = 0
+    for d in test_newClasses_loader:
+
+        inputs, labels = d
+        val_h = model.extractor.init_hidden(len(inputs))
+
+        # inputs , labels = order_classes(inputs,np.argmax(labels, axis = 1),iteration)
+        # labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
+        # labels = torch.from_numpy(labels).float()
+        inputs = inputs.cuda()
+        #labels = torch.from_numpy(tf.keras.utils.to_categorical(np.argmax(labels, axis = 1), num_classes=baseClassesNb, dtype='int32')).float()
+        labels = labels.cuda()
+
+        val_h = tuple([each.data for each in val_h])
+
+        #print(np.shape(x_support), np.shape(x_query))
+        # zero the parameter gradients
+
+        #print(np.shape(labels))
+        log_p,val_h = model.forward_offline(inputs,labels,inputs,val_h)
+        #print(log_p, y_query)
+        #clipwise_output = model(inputs,inputs.shape[0])
+        #print("....",np.shape(clipwise_output))
+        #clipwise_output = outputs['clipwise_output']
+        test_loss = F.binary_cross_entropy(log_p, labels)
+
+        test_output_newClass.append(log_p.data.cpu().numpy())
+        true_test_output_newClass.append(labels.data.cpu().numpy())
+        running_test_loss += test_loss
+        n_steps += 1
+##########################################################################################################################
+
+    test_oo = np.argmax(np.vstack(test_output_newClass), axis = 1)
+    true_test_oo = np.argmax(np.vstack(true_test_output_newClass), axis = 1)
+
+    accuracy = metrics.accuracy_score(true_test_oo, test_oo)
+    precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, labels=np.unique(true_test_oo), average='macro')
+    try:
+        auc_test = metrics.roc_auc_score(np.vstack(true_test_output_newClass), np.vstack(test_output_newClass), labels=np.unique(true_test_oo), average='macro')
+    except ValueError:
+        auc_test = None
+    epoch_test_loss = running_test_loss / n_steps
+    print('----------------------------------------------------')
+    print('FINAL New Class Test loss: {}'.format(epoch_test_loss))
+    print('FINAL New Class TEST average_precision: {}'.format(precision))
+    print('FINAL New Class TEST average f1: {}'.format(fscore))
+    print('FINAL New Class TEST average recall: {}'.format(recall))
+    print('FINAL New Class TEST auc: {}'.format(accuracy))
+
+C = confusion_matrix(true_test_oo, test_oo,labels = np.unique(true_test_oo))
+
+# #labels = np.argmax(embeddings_list['labels'],axis=1)
+# labels = true_test_oo.copy()
+# for i in range(len(true_test_oo)):
+#     labels[i] = list(mapping.keys())[true_test_oo[i]]
+
+plt.figure(figsize=(10,10))
+plot_confusion_matrix(C, class_list=np.unique(true_test_oo), normalize=True, title='FINAL Predicted Results')
+
+#### Evaluate on test data after updating prototypes using all training data 
+eval_output = []
+true_output = []
+test_output = []
+true_test_output = []
+#h = model.extractor.init_hidden(n_support*baseClassesNb)
+#val_h = model.extractor.init_hidden(n_support*baseClassesNb)
+
+#print(np.shape(val_h[0]))        
+
+model.eval()
+model.extractor.eval()
+with torch.no_grad():
+    print('TESTING !!')
+    running_test_loss = 0.0
+    n_steps = 0
+    for d in test_all_loader:
+
+        inputs, labels = d
+        val_h = model.extractor.init_hidden(len(inputs))
+
+        # inputs , labels = order_classes(inputs,np.argmax(labels, axis = 1),iteration)
+        # labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
+        # labels = torch.from_numpy(labels).float()
+        inputs = inputs.cuda()
+        #labels = torch.from_numpy(tf.keras.utils.to_categorical(np.argmax(labels, axis = 1), num_classes=baseClassesNb, dtype='int32')).float()
+        labels = labels.cuda()
+
+        val_h = tuple([each.data for each in val_h])
+
+        #print(np.shape(x_support), np.shape(x_query))
+        # zero the parameter gradients
+
+        #print(np.shape(labels))
+        log_p,val_h = model.forward_offline(inputs,labels,inputs,val_h)
+        #print(log_p, y_query)
+        #clipwise_output = model(inputs,inputs.shape[0])
+        #print("....",np.shape(clipwise_output))
+        #clipwise_output = outputs['clipwise_output']
+        test_loss = F.binary_cross_entropy(log_p, labels)
+
+        test_output.append(log_p.data.cpu().numpy())
+        true_test_output.append(labels.data.cpu().numpy())
+        running_test_loss += test_loss
+        n_steps += 1
+##########################################################################################################################
+
+    test_oo = np.argmax(np.vstack(test_output), axis = 1)
+    true_test_oo = np.argmax(np.vstack(true_test_output), axis = 1)
+
+    accuracy = metrics.accuracy_score(true_test_oo, test_oo)
+    precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, labels=np.unique(true_test_oo), average='macro')
+    try:
+        auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output), labels=np.unique(true_test_oo), average='macro')
+    except ValueError:
+        auc_test = None
+    epoch_test_loss = running_test_loss / n_steps
+    print('----------------------------------------------------')
+    print('FINAL ALL Test loss: {}'.format(epoch_test_loss))
+    print('FINAL ALL TEST average_precision: {}'.format(precision))
+    print('FINAL ALL TEST average f1: {}'.format(fscore))
+    print('FINAL ALL TEST average recall: {}'.format(recall))
+    print('FINAL ALL TEST auc: {}'.format(accuracy))
+
+C = confusion_matrix(true_test_oo, test_oo, labels=np.unique(true_test_oo))
+
+# #labels = np.argmax(embeddings_list['labels'],axis=1)
+# labels = true_test_oo.copy()
+# for i in range(len(true_test_oo)):
+#     labels[i] = list(mapping.keys())[true_test_oo[i]]
+
+plt.figure(figsize=(10,10))
+plot_confusion_matrix(C, class_list=np.unique(true_test_oo), normalize=True, title='FINAL Predicted Results')
 
 
 

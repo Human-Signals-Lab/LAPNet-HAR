@@ -1,12 +1,11 @@
-### training ProtoNet offline on all data and get "True Prototypes" for comparision with streaming version 
-import os
+## streaming data + updating prototypes
+
 import time
 import numpy as np
 import tensorflow as tf
 import sys
 import pickle
-
-
+import os
 import copy
 
 from sklearn.metrics import confusion_matrix, f1_score, precision_score, recall_score,accuracy_score
@@ -21,7 +20,6 @@ from sklearn import metrics
 from enum import Enum
 import librosa.display
 import sys
-sys.path.append('/media/hd4t2/Rebecca/Research-ContinualLearning/streaming-vis-pca-master/')
 from scipy import stats 
 import datetime
 from scipy.fftpack import dct
@@ -41,13 +39,23 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data
 from torch.utils.data import TensorDataset
+#os.environ["CUDA_VISIBLE_DEVICES"]="0"
 from data_handler import *
 import shutil
 from prototype_memory import *
+from replay_memory import *
 from proto_net import *
+from losses import *
 from utils import *
 import json
 import argparse
+
+seed = 1
+torch.backends.cudnn.deterministic = True
+random.seed(seed)
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
+np.random.seed(seed)
 
 
 parser = argparse.ArgumentParser(description="Offline ProtoNet")
@@ -60,26 +68,83 @@ parser.add_argument('--window_length_PAMAP2', type=float, default = 1.)
 parser.add_argument('--window_step_PAMAP2', type=float, default = 0.5)
 parser.add_argument('--epochs', type=int, default = 100)
 parser.add_argument('--support', type=int, default = 10)
-parser.add_argument('--window_length_USC_HAD', type=float, default = 1.)
-parser.add_argument('--window_step_USC_HAD', type=float, default = 0.5)
-parser.add_argument('--cuda_device', type=str, default='1')
+parser.add_argument('--online_epochs', type=int, default=1)
+parser.add_argument('--alpha', type=float, default=.5)
+parser.add_argument('--replay_size', type=int, default=6)
+parser.add_argument('--not_all_buffer_classes', action='store_true', default=False)
+parser.add_argument('--random_stream', action='store_true', default=False)
+parser.add_argument('--cuda_device', type=str, default='0')
+parser.add_argument('--online_batch', type=int, default=20)
+parser.add_argument('--contrastive_loss', action='store_true', default=False)
+parser.add_argument('--margin', type=int, default=1)
+parser.add_argument('--prototypical_contrastive_loss', action='store_true', default=False)
+parser.add_argument('--T', type=float, default=1.)
 parser.add_argument('--window_length_Skoda', type=int, default=98)
 parser.add_argument('--window_step_Skoda', type=int, default=49)
-parser.add_argument('--window_length_WISDM', type=float, default=5.)
-parser.add_argument('--window_step_WISDM', type=float, default=2.5)
-parser.add_argument('--WISDM_device', type=str, default='phone')
 parser.add_argument('--window_length_HAPT', type=float, default=2.56)
-parser.add_argument('--seed', type=int, default=1)
+parser.add_argument('--contrastive_loss_with_prototypes', action='store_true', default=False)
+
 params = parser.parse_args()
+
 os.environ["CUDA_VISIBLE_DEVICES"]=params.cuda_device
+def plotCNNStatistics(statistics_path):
 
-seed = params.seed
-torch.backends.cudnn.deterministic = True
-random.seed(seed)
-torch.manual_seed(1)
-torch.cuda.manual_seed(1)
-np.random.seed(seed)
+    statistics_dict = cPickle.load(open(statistics_path, 'rb'))
 
+    # Plot
+    fig, ax = plt.subplots(1, 1, figsize=(15, 8))
+    lines = []
+ 
+    bal_alpha = 0.3
+    test_alpha = 1.0
+    bal_map = np.array([statistics['Trainloss'].cpu().data.numpy() for statistics in statistics_dict['Trainloss']])    # (N, classes_num)
+    test_map = np.array([statistics['Testloss'] for statistics in statistics_dict['Testloss']])    # (N, classes_num)
+    test_f1 = np.array([statistics['test_f1'] for statistics in statistics_dict['test_f1']])    # (N, classes_num)
+
+    basetrain_map = np.array([statistics['BaseTrainloss'].cpu().data.numpy() for statistics in statistics_dict['BaseTrainloss']])
+    basetrain_f1 = np.array([statistics['BaseTrain_f1'] for statistics in statistics_dict['BaseTrain_f1']])
+
+    line, = ax.plot(bal_map, color='r', alpha=bal_alpha)
+    line, = ax.plot(test_map, color='r', alpha=test_alpha)
+
+    lines.append(line)
+     
+    ax.grid(color='b', linestyle='solid', linewidth=0.3)
+    plt.legend(labels=['Training Loss','Testing Loss'], loc=2)
+
+    fig, ax = plt.subplots(1, 1, figsize=(15, 8))
+    line, = ax.plot(test_f1, color='r', alpha=test_alpha)
+    ax.yaxis.set_ticks(np.arange(0, 1.01, 0.05))
+    ax.yaxis.set_ticklabels(np.around(np.arange(0, 1.01, 0.05), decimals=2))        
+    plt.ylabel('Test Average Fscore')
+
+    fig, ax = plt.subplots(1, 1, figsize=(15, 8))
+    line, = ax.plot(basetrain_map, color='r', alpha=test_alpha)   
+    plt.ylabel('Base Train Loss')
+
+    fig, ax = plt.subplots(1, 1, figsize=(15, 8))
+    line, = ax.plot(basetrain_f1, color='r', alpha=test_alpha)
+    ax.yaxis.set_ticks(np.arange(0, 1.01, 0.05))
+    ax.yaxis.set_ticklabels(np.around(np.arange(0, 1.01, 0.05), decimals=2))        
+    plt.ylabel('Base train Average Fscore')
+
+def plotForgettingScore(statistics_path):
+
+    statistics_dict = cPickle.load(open(statistics_path, 'rb'))
+
+    # Plot
+    fig, ax = plt.subplots(1, 1, figsize=(15, 8))
+    lines = []
+ 
+    bal_alpha = 0.3
+    test_alpha = 1.0
+    bal_map = np.array([statistics['Forgetting Score'] for statistics in statistics_dict['ForgettingScore']])    # (N, classes_num)
+
+    line, = ax.plot(bal_map, color='r', alpha=bal_alpha)
+    lines.append(line)
+     
+    ax.grid(color='b', linestyle='solid', linewidth=0.3)
+    plt.legend(labels=['Forgetting Score'], loc=2)
 if params.data == 'Opportunity':
     ##################### Opportunity Dataset ##########################
 
@@ -113,7 +178,7 @@ if params.data == 'Opportunity':
     NB_SENSOR_CHANNELS_WITH_FILTERING = 149
 
     # Hardcoded number of classes in the gesture recognition problem
-    NUM_CLASSES = 17
+    NUM_CLASSES = 18
 
     # Hardcoded length of the sliding window mechanism employed to segment the data
     SLIDING_WINDOW_LENGTH =24
@@ -178,7 +243,7 @@ elif params.data == 'PAMAP2':
     SLIDING_WINDOW_STEP = int(params.window_step_PAMAP2*SAMPLING_FREQ)
 
     print("Extracting...")
-    if not os.path.exists("./PAMAP2_Dataset/PAMAP2_Train_Test_{}_{}_normalized.data".format(SLIDING_WINDOW_LENGTH,SLIDING_WINDOW_STEP)):
+    if not os.path.exists("./PAMAP2_Dataset/PAMAP2_Train_Test_{}_{}.data".format(SLIDING_WINDOW_LENGTH,SLIDING_WINDOW_STEP)):
         print('PAMAP2_Train_Test.data not found. Please run python3 PAMAP2_preprocessing.py to extract data')
         raise FileNotFoundError 
     else:
@@ -232,44 +297,6 @@ elif params.data == 'DSADS':
     # Batch Size
     BATCH_SIZE = params.batch_size
     BATCH_SIZE_VAL = params.batch_size
-
-
-elif params.data == 'USC-HAD':
-    ################ DSADS Dataset #############################
-
-    NB_SENSOR_CHANNELS =6
-    NUM_CLASSES = 12
-
-    SAMPLING_FREQ = 100 # 100Hz
-    SLIDING_WINDOW_LENGTH = int(params.window_length_USC_HAD*SAMPLING_FREQ)
-
-    #SLIDING_WINDOW_STEP = int(1*SAMPLING_FREQ)
-    SLIDING_WINDOW_STEP = int(params.window_step_USC_HAD*SAMPLING_FREQ)
-
-
-    print("Extracting...")
-    if not os.path.exists("./USC-HAD/USC_HAD_Train_Test_{}_{}.data".format(SLIDING_WINDOW_LENGTH,SLIDING_WINDOW_STEP)):
-        print('USC_HAD_Train_Test not found. Please run python3 USC_HAD_processing.py to extract data')
-        raise FileNotFoundError 
-    else:
-        print("Loading data...")
-        X_train, y_train_segments, X_test, y_test_segments = load_dataset("./USC-HAD/USC_HAD_Train_Test_{}_{}.data".format(SLIDING_WINDOW_LENGTH,SLIDING_WINDOW_STEP))
-
-    print(" ..train data: inputs {0}, targets {1}".format(X_train.shape, y_train_segments.shape))
-    print(" ..test data : inputs {0}, targets {1}".format(X_test.shape, y_test_segments.shape))
-
-    print(Counter(y_train_segments))
-
-
-    classes = np.unique(y_train_segments)
-
-
-    NUM_CLASSES = len(classes)
-
-    # Batch Size
-    BATCH_SIZE = params.batch_size
-    BATCH_SIZE_VAL = params.batch_size
-
 elif params.data == 'Skoda':
     ################ DSADS Dataset #############################
 
@@ -290,41 +317,6 @@ elif params.data == 'Skoda':
     else:
         print("Loading data...")
         X_train, y_train_segments, X_test, y_test_segments = load_dataset("./Skoda_data/Skoda_Train_Test_{}_{}.data".format(SLIDING_WINDOW_LENGTH,SLIDING_WINDOW_STEP))
-
-    print(" ..train data: inputs {0}, targets {1}".format(X_train.shape, y_train_segments.shape))
-    print(" ..test data : inputs {0}, targets {1}".format(X_test.shape, y_test_segments.shape))
-
-    print(Counter(y_train_segments))
-
-
-    classes = np.unique(y_train_segments)
-
-
-    NUM_CLASSES = len(classes)
-
-    # Batch Size
-    BATCH_SIZE = params.batch_size
-    BATCH_SIZE_VAL = params.batch_size
-elif params.data == 'WISDM':
-    ################ DSADS Dataset #############################
-
-    NB_SENSOR_CHANNELS =8
-    NUM_CLASSES = 18
-
-    SAMPLING_FREQ = 20 # 20Hz
-    SLIDING_WINDOW_LENGTH = int(params.window_length_WISDM*SAMPLING_FREQ)
-
-    #SLIDING_WINDOW_STEP = int(1*SAMPLING_FREQ)
-    SLIDING_WINDOW_STEP = int(params.window_step_WISDM*SAMPLING_FREQ)
-
-
-    print("Extracting...")
-    if not os.path.exists("./wisdm-dataset/WISDM_{}_Train_Test_{}_{}.data".format(params.WISDM_device,SLIDING_WINDOW_LENGTH,SLIDING_WINDOW_STEP)):
-        print('WISDM_Train_Test not found. Please run python3 WISDM_processing.py to extract data')
-        raise FileNotFoundError 
-    else:
-        print("Loading data...")
-        X_train, y_train_segments, X_test, y_test_segments = load_dataset("./wisdm-dataset/WISDM_{}_Train_Test_{}_{}_avg.data".format(params.WISDM_device, SLIDING_WINDOW_LENGTH,SLIDING_WINDOW_STEP))  
 
     print(" ..train data: inputs {0}, targets {1}".format(X_train.shape, y_train_segments.shape))
     print(" ..test data : inputs {0}, targets {1}".format(X_test.shape, y_test_segments.shape))
@@ -376,7 +368,6 @@ elif params.data == 'HAPT':
     BATCH_SIZE = params.batch_size
     BATCH_SIZE_VAL = params.batch_size
 
-
 """
 
 Get Base Data and Streaming Data 
@@ -384,19 +375,15 @@ Get Base Data and Streaming Data
 """
 
 ## streaming data
-# if params.data == 'Opportunity':
-#     baseClassesNb = NUM_CLASSES - 1
-# elif params.data == 'PAMAP2':
-#     baseClassesNb = NUM_CLASSES
 baseClassesNb = params.baseClasses
 percentage = params.percentage #.05 # 20%
-
-dataHandler = DataHandler(nb_baseClasses=baseClassesNb, seed=seed, train={'data':X_train,'label':y_train_segments}, ClassPercentage=percentage)
+dataHandler = DataHandler(nb_baseClasses=baseClassesNb, seed=0, train={'data':X_train,'label':y_train_segments}, ClassPercentage=percentage)
 dataHandler.streaming_data(nb_NewClasses=params.newClasses)
 baseData = copy.deepcopy(dataHandler.getBaseData())
 baseClasses = np.unique(baseData['label'])
 NewClasses = dataHandler.NewClasses
 newClassesNb = len(NewClasses)
+
 
 mapping = {}
 for i in np.arange(baseClassesNb + newClassesNb):
@@ -423,8 +410,7 @@ for c in baseClasses:
 for x in range(len(y_test_select)):
     y_test_select[x] = mapping[y_test_select[x]]
 
-
-## select base classes in test data 
+## select new classes in test data 
 X_test_newClasses = []
 y_test_newClasses = []
 for c in NewClasses:
@@ -442,24 +428,28 @@ y_test_newClasses_cat = tf.keras.utils.to_categorical(y_test_newClasses, num_cla
 
 #model = InceptionNN(NUM_CLASSES)
 extractor = DeepConvLSTM(n_classes=len(np.unique(baseData['label'])), NB_SENSOR_CHANNELS = NB_SENSOR_CHANNELS, SLIDING_WINDOW_LENGTH = SLIDING_WINDOW_LENGTH)
-model = ProtoNet(extractor,128,baseClassesNb)
-
+model = ProtoNet(extractor,128,baseClassesNb+newClassesNb)
 
 if torch.cuda.is_available():
     model.cuda()
 
 torch.backends.cudnn.deterministic = True
 random.seed(seed)
-torch.manual_seed(1)
-torch.cuda.manual_seed(1)
+torch.manual_seed(seed)
+torch.cuda.manual_seed(seed)
 np.random.seed(seed)
-
 # Statistics
-statistics_path = './statistics/OfflineProtoNet_DeepConvLSTM_' + params.data + '.pkl'
+statistics_path = './statistics/OnlineProtoNet_DeepConvLSTM_{}_baseClasses_{}_percentage_{}_online_epochs_{}_WeightedUpdate_{}_not_all_buffer_classes_{}_random_stream_{}.pkl'.format(params.data, 
+    params.baseClasses, params.percentage, params.online_epochs, params.alpha, params.not_all_buffer_classes, params.random_stream)
+forgetting_path = './forgetting_score/OnlineProtoNet_DeepConvLSTM_{}_baseClasses_{}_percentage_{}_online_epochs_{}_WeightedUpdate_{}_contrastive_loss_{}.pkl'.format(params.data, params.baseClasses, params.percentage, params.online_epochs, params.alpha, params.contrastive_loss)
 
 if not os.path.exists(os.path.dirname(statistics_path)):
     os.makedirs(os.path.dirname(statistics_path))
 statistics_container = StatisticsContainer(statistics_path)
+
+if not os.path.exists(os.path.dirname(forgetting_path)):
+    os.makedirs(os.path.dirname(forgetting_path))
+forgetting_container = ForgettingContainer(forgetting_path)
 
 
 
@@ -475,14 +465,11 @@ train_data = TensorDataset(x_train_tensor, y_train_tensor)
 test_data = TensorDataset(x_test_tensor, y_test_tensor)
 test_newClasses_data = TensorDataset(x_test_newclasses_tensor, y_test_newClasses_tensor)
 
-if params.data == 'WISDM':
-    train_loader = torch.utils.data.DataLoader(dataset=train_data, 
-                    batch_size=BATCH_SIZE,
-                    num_workers=1, pin_memory=True, shuffle = True,drop_last=True)
-else:
-    train_loader = torch.utils.data.DataLoader(dataset=train_data, 
+train_loader = torch.utils.data.DataLoader(dataset=train_data, 
                     batch_size=BATCH_SIZE,
                     num_workers=1, pin_memory=True, shuffle = True,drop_last=False)
+
+
 test_loader = torch.utils.data.DataLoader(dataset=test_data, 
                         batch_size=BATCH_SIZE_VAL,
                         num_workers=1, pin_memory=True, shuffle = True,drop_last=False)
@@ -494,7 +481,12 @@ if newClassesNb > 1:
 
 optimizer = optim.Adam(model.parameters(), lr=1e-3,betas=(0.9, 0.999), eps=1e-08, weight_decay=0., amsgrad=True)
 
-
+if params.contrastive_loss:
+    ContrastiveLoss = OnlineContrastiveLoss(model, PairSelector(balance=False), margin=params.margin)
+if params.prototypical_contrastive_loss:
+    PrototypicalContrastiveLoss = OnlinePrototypicalContrastiveLoss(model, params.T, baseClassesNb+newClassesNb)
+if params.contrastive_loss_with_prototypes:
+    ContrastiveLossWithPrototypes = OnlineContrastiveLossWithPrototypes(model, PairSelector(balance=False), margin=params.margin)
 n_epochs = params.epochs
 n_support = params.support ## HARD CODED
 iteration = 0
@@ -507,8 +499,6 @@ for epoch in range(n_epochs):
         # get the inputs; data is a list of [inputs, labels]
         inputs, labels = d
         x_support, y_support, x_query, y_query = extract_sample(len(np.unique(np.argmax(labels,axis=1))), n_support, n_support, inputs, np.argmax(labels, axis = 1), seed = iteration,shuffle=True)
-        #print("Nb of classes in support set {}, nb of classes in query set {}".format(len(np.unique(y_support)), len(np.unique(y_query))))
-        #print(np.shape(x_support),np.shape(x_query))
         h = model.extractor.init_hidden(len(x_support)) 
         query_h = model.extractor.init_hidden(len(x_query))
 
@@ -521,7 +511,6 @@ for epoch in range(n_epochs):
         x_query = x_query.cuda()
         #y_query = tf.keras.utils.to_categorical(y_query, num_classes=baseClassesNb, dtype='int32')
         y_query = torch.from_numpy(y_query).long().cuda()
-        #print(np.shape(x_support),np.shape(x_query))
 
 
         h = tuple([each.data for each in h])
@@ -531,7 +520,6 @@ for epoch in range(n_epochs):
         optimizer.zero_grad()
 
         log_p,h = model.forward_offline(x_support,y_support,x_query,h,query_h)
-
         key2idx = torch.empty(baseClassesNb,dtype=torch.long).cuda()
         proto_keys = list(model.memory.prototypes.keys())
         #import pdb; pdb.set_trace()
@@ -541,9 +529,18 @@ for epoch in range(n_epochs):
 
         y_query = key2idx[y_query].view(-1,1)
         y_query = tf.keras.utils.to_categorical(y_query.cpu().numpy(), num_classes=len(proto_keys), dtype='int32')
-        y_query = torch.from_numpy(y_query).float().cuda()   
+        y_query = torch.from_numpy(y_query).float().cuda() 
         #print(np.argmax(log_p.data.cpu().numpy(),axis=1),np.argmax(y_query.data.cpu().numpy(),axis=1))
         loss = F.binary_cross_entropy(log_p, y_query)
+        if params.contrastive_loss:
+            _,_,z_query = model.extractor(x_query,query_h, x_query.size(0))
+            loss += ContrastiveLoss(z_query, y_query)
+        if params.contrastive_loss_with_prototypes:
+            _,_,z_query = model.extractor(x_query,query_h, x_query.size(0))
+            loss += ContrastiveLossWithPrototypes(z_query, y_query,model)
+        # if params.prototypical_contrastive_loss:
+        #     _,_,z_query = model.extractor(x_query,query_h, x_query.size(0))
+        #     loss += PrototypicalContrastiveLoss(z_query, y_query)
         running_loss += loss
         loss.backward()
         optimizer.step()
@@ -604,9 +601,9 @@ for epoch in range(n_epochs):
         true_test_oo = np.argmax(np.vstack(true_test_output), axis = 1)
 
         accuracy = metrics.accuracy_score(true_test_oo, test_oo)
-        precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, labels=np.unique(true_test_oo), average='weighted')
+        precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, labels=np.unique(true_test_oo), average='macro')
         try:
-            auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output), labels=np.unique(true_test_oo), average="weighted")
+            auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output), labels=np.unique(true_test_oo), average='macro')
         except ValueError:
             auc_test = None
         epoch_test_loss = running_test_loss / n_steps
@@ -630,22 +627,8 @@ for epoch in range(n_epochs):
 
     iteration += 1
 
-C = confusion_matrix(true_test_oo, test_oo)
 
-labels = copy.deepcopy(true_test_oo)
-
-for i in range(len(true_test_oo)):
-    labels[i] = list(mapping.keys())[true_test_oo[i]]
-
-plt.figure(figsize=(10,10))
-plot_confusion_matrix(C, class_list=np.unique(labels), normalize=True, title='Predicted Results')
-
-plotCNNStatistics(statistics_path)
-
-## get prototypes from train data and visualize
-
-## extract training embeddings
-
+#plotCNNStatistics(statistics_path)
 model.eval()
 #model.extractor.eval()
 embeddings_list = dict()
@@ -654,31 +637,77 @@ embeddings_list['labels'] = []
 with torch.no_grad():    
     iteration = 0
     for tr_input, y_tr in train_loader:
-
-        tr_input , y_tr = order_classes(tr_input,np.argmax(y_tr, axis = 1),iteration)
         tr_h = model.extractor.init_hidden(len(tr_input)) 
-
-        y_tr = tf.keras.utils.to_categorical(y_tr,num_classes=baseClassesNb,dtype='int32')
-        y_tr = torch.from_numpy(y_tr).float()
+    
+        # tr_input , y_tr = order_classes(tr_input,np.argmax(y_tr, axis = 1),iteration)
+        # y_tr = tf.keras.utils.to_categorical(y_tr,num_classes=baseClassesNb,dtype='int32')
+        # y_tr = torch.from_numpy(y_tr).float()
         tr_input = tr_input.cuda()
         #labels = torch.from_numpy(tf.keras.utils.to_categorical(np.argmax(labels, axis = 1), num_classes=baseClassesNb, dtype='int32')).float()
         y_tr = y_tr.cuda()
         tr_h = tuple(each.data for each in tr_h)
 
-        _,tr_h, embeddings = model.extractor(tr_input, tr_h, len(tr_input))
+        _,tr_h, embeddings = model.extractor(tr_input, tr_h, len(y_tr))
         embeddings_list['embeddings'].extend(embeddings.data.cpu().numpy())
         embeddings_list['labels'].extend(y_tr.data.cpu().numpy())
 
-### plot prototypes before updating
-pca = PCA(n_components=2)
-before_prot = list(model.memory.prototypes.values())
-pca.fit(before_prot)
+labels = torch.from_numpy(np.array(embeddings_list['labels'])).float()
+
+z_proto = torch.from_numpy(np.array(embeddings_list['embeddings'])).float().cuda()
+labels = labels.cuda()
+model.update_protoMemory(z_proto,labels)
+
+### setup replay memory 
+replay_buffer = ReplayMemory(params.replay_size)
+yy = [np.argmax(l) for l in y_train]
+replay_buffer.update((np.array(baseData['data']), np.array(yy)))
+
+
+## save prototypes
+json_dict = copy.deepcopy(model.memory.prototypes)
+for key in model.memory.prototypes.keys():
+    print(key, type(key))
+    if type(key) is not str:
+        json_dict[str(key)] = str(json_dict[key])
+        del json_dict[key]
+
+with open("./prototypes_json/Debugging_{}_Data_OfflineShuffle_ModelAdaptation.json".format(percentage), "w") as write_file:
+    str_ = json.dumps(json_dict)
+    write_file.write(str_)
+
+##ge get train performance on base training data 
+
+model.eval()
+embeddings_newClasses_list = dict()
+embeddings_newClasses_list['embeddings'] = []
+embeddings_newClasses_list['labels'] = []
+with torch.no_grad():
+    print('Getting Performance on Base Data !!')
+    running_train_loss = 0.0
+    n_steps = 0
+    for d in test_newClasses_loader:
+
+        inputs, labels = d
+        val_h = model.extractor.init_hidden(len(inputs))
+####### Testing without selecting random support ########################################################################
+        #inputs , labels = order_classes(inputs,np.argmax(labels, axis = 1),iteration)
+        #labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
+        #labels = torch.from_numpy(labels).float()
+        inputs = inputs.cuda()
+        #labels = torch.from_numpy(tf.keras.utils.to_categorical(np.argmax(labels, axis = 1), num_classes=baseClassesNb, dtype='int32')).float()
+        labels = labels.cuda()
+
+        val_h = tuple([each.data for each in val_h])
+        _,val_h, embeddings = model.extractor(inputs, val_h, len(labels))
+        embeddings_newClasses_list['embeddings'].extend(embeddings.data.cpu().numpy())
+        embeddings_newClasses_list['labels'].extend(labels.data.cpu().numpy())
+##########################################################################################################################
+
 cm = plt.get_cmap('gist_rainbow')
 NUM_COLORS = len(classes)
 
 colors = [cm((1.*i)/NUM_COLORS) for i in np.arange(NUM_COLORS)]
 markers=['.',  'x', 'h','1']
-
 ## OPPORTUNITY
 if params.data == 'Opportunity':
     LABELS = ['OpenDoor1', 'OpenDoor2','CloseDoor1','CloseDoor2','OpenFridge','CloseFridge','OpenDishwasher','CloseDishwasher','OpenDrawer1','CloseDrawer1','OpenDrawer2','CloseDrawer2','OpenDrawer3','CloseDrawer3','CleanTable','DrinkFromCup','ToogleSwitch']
@@ -689,256 +718,57 @@ elif params.data == 'PAMAP2':
 elif params.data == 'DSADS':
     LABELS = {1:'sitting',2:'standing',3:'lying on back',4: 'lying on right side',5: 'ascending stairs',6: 'descending stairs',7: 'standing in elevator still',8: 'moving around in elevator',9: 'walking in parking lot',10: 'walking on treadmill w/ speed 4km/h in flat', 11:'walking on treadmill w/ speed 4km/h in 15 deg',12: 'running on treadmill',
     13:'exercising on stepper',14: 'exercising on cross trainer',15: 'cycling on exercise bike in horizontal',16: 'cycling on exercise bike in vertical',17: 'rowing',18: 'jumping',19:'playing basketbal'}    
-elif params.data == 'USC-HAD':
-    LABELS = {1:'walking forward',2:'walking left',3:'walking right',4: 'walking upstairs',5: 'walking downstairs',6: 'running forward',7: 'jumping up',8: 'sitting',9: 'standing',10: 'sleeping', 11:'elevator up',12: 'elevator down'}    
 elif params.data == 'Skoda':
     LABELS = {0: 'null class', 1: 'write on notepad', 2: 'open hood', 3: 'close hood',
               4: 'check gaps on the front door', 5: 'open left front door',
               6: 'close left front door', 7: 'close both left door', 8: 'check trunk gaps',
-              9: 'open and close trunk', 10: 'check steering wheel'}  
-elif params.data =='WISDM':
-    LABELS = {0:'walking',1:'jogging',2:'stairs',3:'sitting',4:'standing',5:'typing',6:'teeth',7:'soup',8:'chips',9:'pasta',10:'drinking',11:'sandwich',
-    12:'kicking',14:'catch',15:'dribbling', 16:'writing',17:'clapping',18:'folding'}
+              9: 'open and close trunk', 10: 'check steering wheel'}    
 elif params.data == 'HAPT':
     LABELS = {1:'walking',2:'walking upstairs',3:'walking downstairs',4:'sitting',5:'standing',6:'laying',7:'stand to sit',8:'sit to stand',
     9:'sit to lie',10:'lie to sit',11:'stand to lie',12:'lie to stand'}
-  
-# plt.figure(figsize=(10,10))
-# prot_pca_all = pca.transform(before_prot)
 
-# ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
-# for k, col in zip(ll, colors):
-#     #print(k, np.shape(test_embd_pca[y_pred==k,0]))
-#     plt.plot(prot_pca_all[ll==k,0], prot_pca_all[k,1], 'o',
-#             markerfacecolor=col, markeredgecolor=col,
-#              marker=markers[k%len(markers)],markersize=7)
-
-#     # plt.plot(emb_pca[emb_labels==k,0], emb_pca[emb_labels==k,1], 'o',
-#     #         markerfacecolor=col, markeredgecolor=col,
-#     #          marker=markers[mapping[k]%len(markers)],markersize=7)
-
-#     # plt.plot(prototypes_pca[mapping[k],0],prototypes_pca[mapping[k],1], 'o',
-#     #         markerfacecolor=col, markeredgecolor='k', 
-#     #         marker=markers[mapping[k]%len(markers)],markersize=7) 
-
-#     #add label
-#     plt.annotate(LABELS[list(mapping.keys())[k]], (prot_pca_all[k,0], prot_pca_all[k,1]),
-#                  horizontalalignment='center',
-#                  verticalalignment='center',
-#                  size=10, weight='bold',rotation=45,
-#                  color='k')
-# plt.title("Prototypes before updating using all training data")
-
-labels = torch.from_numpy(np.array(embeddings_list['labels'])).float()
-#labels = tf.keras.utils.to_categorical(labels, baseClassesNb, dtype='int32')
-# for i in range(len(labels)):
-#     labels[i] = list(mapping.keys())[labels[i]]
-
-### update prototypes
-#prot_mem = PrototypeMemory()
-
-z_proto = torch.from_numpy(np.array(embeddings_list['embeddings'])).float().cuda()
-labels = labels.cuda()
-model.update_protoMemory(z_proto,labels)
-
-#sys.exit()
-#prototypes,prot_std = extract_prototypes(embeddings_list['embeddings'],labels)
-
-## visualization after updating prototypes
-plt.figure(figsize=(10,10))
-
-
-#prototypes_pca = pca.transform(list(prot_mem.prototypes.values()))
-prototypes_pca = pca.fit_transform(list(model.memory.prototypes.values()))
+ ### starting streaming
+pca = PCA(n_components=2)
+pca.fit(embeddings_list['embeddings'])
 emb_pca = pca.transform(embeddings_list['embeddings'])
 emb_labels = np.argmax(np.array(embeddings_list['labels']),axis=1)
 #emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
 
-ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
-for k, col in zip(ll, colors):
-    #print(k, np.shape(test_embd_pca[y_pred==k,0]))
-    plt.plot(prototypes_pca[ll==k,0], prototypes_pca[k,1], 'o',
-            markerfacecolor=col, markeredgecolor=col,
-             marker=markers[k%len(markers)],markersize=7)
+#ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)[:3]
+for k, col in zip(baseClasses[:3], colors):
 
-    plt.plot(emb_pca[emb_labels==k,0], emb_pca[emb_labels==k,1], 'o',
+    plt.plot(emb_pca[emb_labels==mapping[k],0], emb_pca[emb_labels==mapping[k],1], 'o',
             markerfacecolor=col, markeredgecolor=col,
-             marker=markers[k%len(markers)],markersize=7)
+             marker=markers[mapping[k]%len(markers)],markersize=7)
 
     #add label
-    plt.annotate(LABELS[list(mapping.keys())[k]], (prototypes_pca[k,0], prototypes_pca[k,1]),
+    plt.annotate(LABELS[k], (np.mean(emb_pca[emb_labels==mapping[k],0],axis=0), np.mean(emb_pca[emb_labels==mapping[k],1], axis=0)),
                  horizontalalignment='center',
                  verticalalignment='center',
-                 size=10, weight='bold',rotation=45,
+                 size=15, weight='bold',rotation=45,
                  color='k')
-plt.title("Prototypes after updating using all training data + training embeddings")
 
+ ### starting streaming
+pca.fit(embeddings_newClasses_list['embeddings'])
+emb_pca = pca.transform(embeddings_newClasses_list['embeddings'])
+emb_labels = np.argmax(np.array(embeddings_newClasses_list['labels']),axis=1)
+#emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
 
-## incremental PCA 
+#ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
+for k, col in zip([NewClasses[0]], colors[len(baseClasses[:3])+1:]):
 
-### plot prototypes before updating
-ipca = IncPCA(n_components=2)
-ipca.partial_fit(before_prot)
-
-cm = plt.get_cmap('gist_rainbow')
-NUM_COLORS = len(classes)
-
-colors = [cm((1.*i)/NUM_COLORS) for i in np.arange(NUM_COLORS)]
-markers=['.',  'x', 'h','1']
-
- 
-plt.figure(figsize=(10,10))
-prot_pca_all = ipca.transform(before_prot)
-
-ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
-for k, col in zip(ll, colors):
-    #print(k, np.shape(test_embd_pca[y_pred==k,0]))
-    plt.plot(prot_pca_all[ll==k,0], prot_pca_all[k,1], 'o',
+    plt.plot(emb_pca[emb_labels==mapping[k],0], emb_pca[emb_labels==mapping[k],1], 'o',
             markerfacecolor=col, markeredgecolor=col,
-             marker=markers[k%len(markers)],markersize=7)
-
-    # plt.plot(emb_pca[emb_labels==k,0], emb_pca[emb_labels==k,1], 'o',
-    #         markerfacecolor=col, markeredgecolor=col,
-    #          marker=markers[mapping[k]%len(markers)],markersize=7)
-
-    # plt.plot(prototypes_pca[mapping[k],0],prototypes_pca[mapping[k],1], 'o',
-    #         markerfacecolor=col, markeredgecolor='k', 
-    #         marker=markers[mapping[k]%len(markers)],markersize=7) 
+             marker=markers[mapping[k]%len(markers)],markersize=7)
 
     #add label
-    plt.annotate(LABELS[list(mapping.keys())[k]], (prot_pca_all[k,0], prot_pca_all[k,1]),
+    plt.annotate(LABELS[k], (np.mean(emb_pca[emb_labels==mapping[k],0],axis=0), np.mean(emb_pca[emb_labels==mapping[k],1], axis=0)),
                  horizontalalignment='center',
                  verticalalignment='center',
-                 size=10, weight='bold',rotation=45,
+                 size=15, weight='bold',rotation=45,
                  color='k')
-plt.title("Prototypes before updating using all training data")
-
-labels = torch.from_numpy(np.array(embeddings_list['labels'])).float()
-#labels = tf.keras.utils.to_categorical(labels, baseClassesNb, dtype='int32')
-# for i in range(len(labels)):
-#     labels[i] = list(mapping.keys())[labels[i]]
-
-### update prototypes
-#prot_mem = PrototypeMemory()
-
-z_proto = torch.from_numpy(np.array(embeddings_list['embeddings'])).float().cuda()
-labels = labels.cuda()
-model.update_protoMemory(z_proto,labels)
-
-#sys.exit()
-#prototypes,prot_std = extract_prototypes(embeddings_list['embeddings'],labels)
-
-## visualization after updating prototypes
-plt.figure(figsize=(10,10))
-
-
-#prototypes_pca = pca.transform(list(prot_mem.prototypes.values()))
-ipca.partial_fit(list(model.memory.prototypes.values()))
-prototypes_pca_next = ipca.transform(list(model.memory.prototypes.values()))
-prototypes_pca = IncPCA.geom_trans(prot_pca_all,prototypes_pca_next)
-ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
-for k, col in zip(ll, colors):
-    #print(k, np.shape(test_embd_pca[y_pred==k,0]))
-    plt.plot(prototypes_pca[ll==k,0], prototypes_pca[k,1], 'o',
-            markerfacecolor=col, markeredgecolor=col,
-             marker=markers[k%len(markers)],markersize=7)
-
-    # plt.plot(emb_pca[emb_labels==k,0], emb_pca[emb_labels==k,1], 'o',
-    #         markerfacecolor=col, markeredgecolor=col,
-    #          marker=markers[mapping[k]%len(markers)],markersize=7)
-
-    # plt.plot(prototypes_pca[mapping[k],0],prototypes_pca[mapping[k],1], 'o',
-    #         markerfacecolor=col, markeredgecolor='k', 
-    #         marker=markers[mapping[k]%len(markers)],markersize=7) 
-
-    #add label
-    plt.annotate(LABELS[list(mapping.keys())[k]], (prototypes_pca[k,0], prototypes_pca[k,1]),
-                 horizontalalignment='center',
-                 verticalalignment='center',
-                 size=10, weight='bold',rotation=45,
-                 color='k')
-plt.title("Prototypes after updating using all training data")
-
-
-
-#### Evaluate on test data after updating prototypes using all training data 
-eval_output = []
-true_output = []
-test_output = []
-true_test_output = []
-#h = model.extractor.init_hidden(n_support*baseClassesNb)
-#val_h = model.extractor.init_hidden(n_support*baseClassesNb)
-
-#print(np.shape(val_h[0]))        
-
-model.eval()
-
-with torch.no_grad():
-    print('TESTING !!')
-    running_test_loss = 0.0
-    n_steps = 0
-    for d in test_loader:
-
-        inputs, labels = d
-        val_h = model.extractor.init_hidden(len(inputs))
-
-        # inputs , labels = order_classes(inputs,np.argmax(labels, axis = 1),iteration)
-        # labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
-        # labels = torch.from_numpy(labels).float()
-        inputs = inputs.cuda()
-        #labels = torch.from_numpy(tf.keras.utils.to_categorical(np.argmax(labels, axis = 1), num_classes=baseClassesNb, dtype='int32')).float()
-        labels = labels.cuda()
-
-        val_h = tuple([each.data for each in val_h])
-
-        #print(np.shape(x_support), np.shape(x_query))
-        # zero the parameter gradients
-
-        #print(np.shape(labels))
-        log_p,val_h = model.forward_offline(inputs,labels,inputs,val_h)
-        #print(log_p, y_query)
-        #clipwise_output = model(inputs,inputs.shape[0])
-        #print("....",np.shape(clipwise_output))
-        #clipwise_output = outputs['clipwise_output']
-        test_loss = F.binary_cross_entropy(log_p, labels)
-
-        test_output.append(log_p.data.cpu().numpy())
-        true_test_output.append(labels.data.cpu().numpy())
-        running_test_loss += test_loss
-        n_steps += 1
-##########################################################################################################################
-
-    test_oo = np.argmax(np.vstack(test_output), axis = 1)
-    true_test_oo = np.argmax(np.vstack(true_test_output), axis = 1)
-
-    accuracy = metrics.accuracy_score(true_test_oo, test_oo)
-    precision, recall, fscore,_ = metrics.precision_recall_fscore_support(true_test_oo, test_oo, labels=np.unique(true_test_oo), average='weighted')
-    try:
-        auc_test = metrics.roc_auc_score(np.vstack(true_test_output), np.vstack(test_output), labels=np.unique(true_test_oo), average="weighted")
-    except ValueError:
-        auc_test = None
-    epoch_test_loss = running_test_loss / n_steps
-    print('----------------------------------------------------')
-    print('FINAL Test loss: {}'.format(epoch_test_loss))
-    print('FINAL TEST average_precision: {}'.format(precision))
-    print('FINAL TEST average f1: {}'.format(fscore))
-    print('FINAL TEST average recall: {}'.format(recall))
-    print('FINAL TEST auc: {}'.format(accuracy))
-
-C = confusion_matrix(true_test_oo, test_oo)
-
-#labels = np.argmax(embeddings_list['labels'],axis=1)
-labels = true_test_oo.copy()
-for i in range(len(true_test_oo)):
-    labels[i] = list(mapping.keys())[true_test_oo[i]]
-
-plt.figure(figsize=(10,10))
-plot_confusion_matrix(C, class_list=np.unique(labels), normalize=True, title='FINAL Predicted Results')
-
 
 
 
 
 plt.show()
-
-

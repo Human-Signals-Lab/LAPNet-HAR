@@ -12,11 +12,11 @@ The deep learning system is written in `python 3`, specifically `pytorch`.
 
 |**Datasets** | **Activity Type** | **# of Sensor Channels** | **# of Classes** | **Balanced**|
 |-------------|-------------------|--------------------------|------------------|-------------|
-|[Opportunity]() | Daily Gestures | 113 | 17 | &#x2715;|
-|[PAMAP2]() | Physical Activities | 52 | 12 | &#x2715;|
-|[DSADS]() | Daily & Sports Activities | 45 | 19 | &#x2713;|
-|[Skoda]() | Car Maintenance Gestures | 30 | 10 | &#x2715;|
-|[HAPT]() | Daily Activities & Postural Transitions | 6 | 12 | &#x2715;|
+|[Opportunity](https://archive.ics.uci.edu/ml/datasets/opportunity+activity+recognition) | Daily Gestures | 113 | 17 | &#x2715;|
+|[PAMAP2](https://archive.ics.uci.edu/ml/datasets/PAMAP2+Physical+Activity+Monitoring) | Physical Activities | 52 | 12 | &#x2715;|
+|[DSADS](https://archive.ics.uci.edu/ml/datasets/daily+and+sports+activities) | Daily & Sports Activities | 45 | 19 | &#x2713;|
+|[Skoda](http://har-dataset.org/doku.php?id=wiki:dataset) | Car Maintenance Gestures | 30 | 10 | &#x2715;|
+|[HAPT](http://archive.ics.uci.edu/ml/datasets/Smartphone-Based+Recognition+of+Human+Activities+and+Postural+Transitions) | Daily Activities & Postural Transitions | 6 | 12 | &#x2715;|
 
 ## Pretrained Models
 

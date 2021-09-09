@@ -13,10 +13,10 @@ The deep learning system is written in `python 3`, specifically `pytorch`.
 |**Datasets** | **Activity Type** | **# of Sensor Channels** | **# of Classes** | **Balanced**|
 |-------------|-------------------|--------------------------|------------------|-------------|
 |[Opportunity]() | Daily Gestures | 113 | 17 | &#x2715;|
-|[PAMAP2]() | Physical Activities | 52 | 12 | &#2715;|
-|[DSADS]() | Daily & Sports Activities | 45 | 19 | &#2713;|
-|[Skoda]() | Car Maintenance Gestures | 30 | 10 | &#2715;|
-|[HAPT]() | Daily Activities & Postural Transitions | 6 | 12 | &#9746;|
+|[PAMAP2]() | Physical Activities | 52 | 12 | &#x2715;|
+|[DSADS]() | Daily & Sports Activities | 45 | 19 | &#x2713;|
+|[Skoda]() | Car Maintenance Gestures | 30 | 10 | &#x2715;|
+|[HAPT]() | Daily Activities & Postural Transitions | 6 | 12 | &#x2715;|
 
 ## Pretrained Models
 

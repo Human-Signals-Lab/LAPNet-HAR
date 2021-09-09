@@ -16,7 +16,7 @@ The deep learning system is written in `python 3`, specifically `pytorch`.
 |[PAMAP2]() | Physical Activities | 52 | 12 | &#2715;|
 |[DSADS]() | Daily & Sports Activities | 45 | 19 | &#2713;|
 |[Skoda]() | Car Maintenance Gestures | 30 | 10 | &#2715;|
-|[HAPT]() | Daily Activities & Postural Transitions | 6 | 12 | &#2715;|
+|[HAPT]() | Daily Activities & Postural Transitions | 6 | 12 | &#9849;|
 
 ## Pretrained Models
 

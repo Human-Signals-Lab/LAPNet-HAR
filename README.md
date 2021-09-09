@@ -11,7 +11,7 @@ The deep learning system is written in `python 3`, specifically `pytorch`.
 *LAPNet-HAR* is evaluated on 5 widely used publicly available HAR datasets:
 
 |**Datasets** | **Activity Type** | **# of Sensor Channels** | **# of Classes** | **Balanced**|
-|-------------|-------------------|--------------------------|------------------|-------------|
+|-------------|-------------------|:--------------------------:|:------------------:|:-------------:|
 |[Opportunity](https://archive.ics.uci.edu/ml/datasets/opportunity+activity+recognition) | Daily Gestures | 113 | 17 | &#x2715;|
 |[PAMAP2](https://archive.ics.uci.edu/ml/datasets/PAMAP2+Physical+Activity+Monitoring) | Physical Activities | 52 | 12 | &#x2715;|
 |[DSADS](https://archive.ics.uci.edu/ml/datasets/daily+and+sports+activities) | Daily & Sports Activities | 45 | 19 | &#x2713;|

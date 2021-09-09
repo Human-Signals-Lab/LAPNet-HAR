@@ -10,12 +10,12 @@ The deep learning system is written in `python 3`, specifically `pytorch`.
 
 *LAPNet-HAR* is evaluated on 5 widely used publicly available HAR datasets:
 
-**Datasets** | **Activity Type** | **# of Sensor Channels** | **# of Classes** | **Balanced**
-[Opportunity]() | Daily Gestures | 113 | 17 | &#9746
-[PAMAP2]() | Physical Activities | 52 | 12 | &#9746
-[DSADS]() | Daily & Sports Activities | 45 | 19 | &#9745
-[Skoda]() | Car Maintenance Gestures | 30 | 10 | &#9746
-[HAPT]() | Daily Activities & Postural Transitions | 6 | 12 | &#9746
+|**Datasets** | **Activity Type** | **# of Sensor Channels** | **# of Classes** | **Balanced**|
+|[Opportunity]() | Daily Gestures | 113 | 17 | &#9746|
+|[PAMAP2]() | Physical Activities | 52 | 12 | &#9746|
+|[DSADS]() | Daily & Sports Activities | 45 | 19 | &#9745|
+|[Skoda]() | Car Maintenance Gestures | 30 | 10 | &#9746|
+|[HAPT]() | Daily Activities & Postural Transitions | 6 | 12 | &#9746|
 
 ## Pretrained Models
 

@@ -8,7 +8,8 @@ This is the research repository for Lifelong Adaptive Machine Learning for Senso
 
 
 
-## System Requirements
+<!---
+## System Requirements>
 
 The deep learning system is written in `python 3`, specifically `pytorch`.
 
@@ -25,9 +26,10 @@ The deep learning system is written in `python 3`, specifically `pytorch`.
 |[HAPT](http://archive.ics.uci.edu/ml/datasets/Smartphone-Based+Recognition+of+Human+Activities+and+Postural+Transitions) | Daily Activities & Postural Transitions | 6 | 12 | &#x2715;|
 
 For every dataset, make sure they are loaded into 
+-->
 
 That's all! For help, questions, and general feedback, contact Rebecca Adaimi (rebecca.adaimi@utexas.edu)
-
+<!---
 ## Reference 
 
 BibTex Reference:
@@ -35,3 +37,4 @@ BibTex Reference:
 ```
 
 ```
+-->

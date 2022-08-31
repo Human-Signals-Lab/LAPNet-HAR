@@ -1,9 +1,11 @@
+# NOTE: THIS REPO IS STILL BEING UPDATED!
+
 
 # Lifelong Adaptive Machine Learning for Sensor-based Human Activity Recognition Using Prototypical Networks
 
 This is the research repository for Lifelong Adaptive Machine Learning for Sensor-based Human Activity Recognition Using Prototypical Networks. It contains the source code for *LAPNet-HAR* framework and all the experiments to reproduce the results in the paper.
 
-## NOTE: THIS REPO IS STILL BEING UPDATED!
+
 
 
 ## System Requirements

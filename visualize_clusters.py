@@ -671,11 +671,36 @@ for key in model.memory.prototypes.keys():
         json_dict[str(key)] = str(json_dict[key])
         del json_dict[key]
 
-with open("./prototypes_json/Debugging_{}_Data_OfflineShuffle_ModelAdaptation.json".format(percentage), "w") as write_file:
-    str_ = json.dumps(json_dict)
-    write_file.write(str_)
+# with open("./prototypes_json/Debugging_{}_Data_OfflineShuffle_ModelAdaptation.json".format(percentage), "w") as write_file:
+#     str_ = json.dumps(json_dict)
+#     write_file.write(str_)
 
 ##ge get train performance on base training data 
+
+
+embeddings_list = dict()
+embeddings_list['embeddings'] = []
+embeddings_list['labels'] = []
+with torch.no_grad():
+    print('Getting Performance on Base Data !!')
+    running_train_loss = 0.0
+    n_steps = 0
+    for d in test_loader:
+
+        inputs, labels = d
+        val_h = model.extractor.init_hidden(len(inputs))
+####### Testing without selecting random support ########################################################################
+        #inputs , labels = order_classes(inputs,np.argmax(labels, axis = 1),iteration)
+        #labels = tf.keras.utils.to_categorical(labels,num_classes=baseClassesNb,dtype='int32')
+        #labels = torch.from_numpy(labels).float()
+        inputs = inputs.cuda()
+        #labels = torch.from_numpy(tf.keras.utils.to_categorical(np.argmax(labels, axis = 1), num_classes=baseClassesNb, dtype='int32')).float()
+        labels = labels.cuda()
+
+        val_h = tuple([each.data for each in val_h])
+        _,val_h, embeddings = model.extractor(inputs, val_h, len(labels))
+        embeddings_list['embeddings'].extend(embeddings.data.cpu().numpy())
+        embeddings_list['labels'].extend(labels.data.cpu().numpy())
 
 model.eval()
 embeddings_newClasses_list = dict()
@@ -701,6 +726,7 @@ with torch.no_grad():
         _,val_h, embeddings = model.extractor(inputs, val_h, len(labels))
         embeddings_newClasses_list['embeddings'].extend(embeddings.data.cpu().numpy())
         embeddings_newClasses_list['labels'].extend(labels.data.cpu().numpy())
+
 ##########################################################################################################################
 
 cm = plt.get_cmap('gist_rainbow')
@@ -728,8 +754,8 @@ elif params.data == 'HAPT':
     9:'sit to lie',10:'lie to sit',11:'stand to lie',12:'lie to stand'}
 
  ### starting streaming
-pca = PCA(n_components=2)
-pca.fit(embeddings_list['embeddings'])
+pca = IncPCA(n_components=2)
+pca.partial_fit(embeddings_list['embeddings'])
 emb_pca = pca.transform(embeddings_list['embeddings'])
 emb_labels = np.argmax(np.array(embeddings_list['labels']),axis=1)
 #emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
@@ -749,7 +775,7 @@ for k, col in zip(baseClasses[:3], colors):
                  color='k')
 
  ### starting streaming
-pca.fit(embeddings_newClasses_list['embeddings'])
+pca.partial_fit(embeddings_newClasses_list['embeddings'])
 emb_pca = pca.transform(embeddings_newClasses_list['embeddings'])
 emb_labels = np.argmax(np.array(embeddings_newClasses_list['labels']),axis=1)
 #emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
@@ -768,7 +794,31 @@ for k, col in zip([NewClasses[0]], colors[len(baseClasses[:3])+1:]):
                  size=15, weight='bold',rotation=45,
                  color='k')
 
+plt.figure()
+all_data = copy.deepcopy(embeddings_list)
+all_data['embeddings'].extend(embeddings_newClasses_list['embeddings'])
+all_data['labels'] = list(np.hstack((all_data['labels'], np.zeros((len(all_data['labels']),newClassesNb)))))
+all_data['labels'].extend(embeddings_newClasses_list['labels'])
+pca = IncPCA(n_components=2)
+pca.partial_fit(all_data['embeddings'])
+emb_pca = pca.transform(all_data['embeddings'])
+emb_labels = np.argmax(np.array(all_data['labels']),axis=1)
+#emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
 
+#ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)[:3]
+all_classes = np.append(baseClasses[:3], NewClasses[0])
+for k, col in zip(all_classes, colors[[0,1,2,6]]):
+
+    plt.plot(emb_pca[emb_labels==mapping[k],0], emb_pca[emb_labels==mapping[k],1], 'o',
+            markerfacecolor=col, markeredgecolor=col,
+             marker=markers[mapping[k]%len(markers)],markersize=7)
+
+    #add label
+    plt.annotate(LABELS[k], (np.mean(emb_pca[emb_labels==mapping[k],0],axis=0), np.mean(emb_pca[emb_labels==mapping[k],1], axis=0)),
+                 horizontalalignment='center',
+                 verticalalignment='center',
+                 size=15, weight='bold',rotation=45,
+                 color='k')
 
 
 plt.show()

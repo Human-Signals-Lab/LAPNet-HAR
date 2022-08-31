@@ -47,6 +47,7 @@ from prototype_memory import *
 from replay_memory import *
 from proto_net import *
 from utils import *
+from augment import *
 from losses import *
 import json
 import argparse
@@ -79,6 +80,7 @@ parser.add_argument('--contrastive_loss_with_prototypes', action='store_true', d
 parser.add_argument('--DSoftmax', action='store_true', default=False)
 parser.add_argument('--seed', type=int, default=1)
 parser.add_argument('--contrastive_loss_offline', action='store_true', default=False)
+parser.add_argument('--augment', action='store_true', default=False)
 
 params = parser.parse_args()
 
@@ -693,9 +695,9 @@ for key in model.memory.prototypes.keys():
         json_dict[str(key)] = str(json_dict[key])
         del json_dict[key]
 
-with open("./prototypes_json/Debugging_{}_Data_OfflineShuffle_ModelAdaptation.json".format(percentage), "w") as write_file:
-    str_ = json.dumps(json_dict)
-    write_file.write(str_)
+# with open("./prototypes_json/Debugging_{}_Data_OfflineShuffle_ModelAdaptation.json".format(percentage), "w") as write_file:
+#     str_ = json.dumps(json_dict)
+#     write_file.write(str_)
 
 ##ge get train performance on base training data 
 
@@ -897,11 +899,25 @@ while not dataHandler.endOfStream():
         # saved_map_labels = copy.deepcopy(query_map_labels)
         saved_support_set = copy.deepcopy(support_set)
         saved_map_labels = copy.deepcopy(map_labels)
-        support_set = torch.from_numpy(np.array(support_set)).float()
-#        query_set = torch.from_numpy(np.array(query_set)).float()
 
         map_labels = tf.keras.utils.to_categorical(map_labels, num_classes=baseClassesNb + newClassesNb, dtype='int32')
-        map_labels = torch.from_numpy(np.array(map_labels)).float()
+
+        if params.augment:
+
+            support_set, map_labels = augment_data(np.array(support_set), np.array(map_labels))
+            map_labels = torch.from_numpy(map_labels).float()
+            support_set = torch.from_numpy(support_set).float()
+        else:
+
+            support_set = torch.from_numpy(np.array(support_set)).float()
+            map_labels = torch.from_numpy(np.array(map_labels)).float()
+
+
+#         support_set = torch.from_numpy(np.array(support_set)).float()
+# #        query_set = torch.from_numpy(np.array(query_set)).float()
+
+#         map_labels = tf.keras.utils.to_categorical(map_labels, num_classes=baseClassesNb + newClassesNb, dtype='int32')
+#         map_labels = torch.from_numpy(np.array(map_labels)).float()
 
         if params.not_all_buffer_classes:
             excluded_classes = np.unique(saved_map_labels)
@@ -1364,14 +1380,21 @@ with torch.no_grad():
         embeddings_newClasses_list['embeddings'].extend(embeddings.data.cpu().numpy())
         embeddings_newClasses_list['labels'].extend(labels.data.cpu().numpy())
 ########################################################################################################################## ### starting streaming
-pca = PCA(n_components=2)
-pca.fit(embeddings_list['embeddings'])
+
+cm = plt.get_cmap('gist_rainbow')
+NUM_COLORS = 12
+
+colors = [cm((1.*i)/NUM_COLORS) for i in np.arange(NUM_COLORS)]
+markers=['.',  'x', 'h','1']
+
+pca = IncPCA(n_components=2)
+pca.partial_fit(embeddings_list['embeddings'])
 emb_pca = pca.transform(embeddings_list['embeddings'])
 emb_labels = np.argmax(np.array(embeddings_list['labels']),axis=1)
 #emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
 
 #ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
-for k, col in zip(baseClasses[:3], colors):
+for k, col in zip(baseClasses[[0,2,4]], colors): #zip(baseClasses[:3], colors):
 
     plt.plot(emb_pca[emb_labels==mapping[k],0], emb_pca[emb_labels==mapping[k],1], 'o',
             markerfacecolor=col, markeredgecolor=col,
@@ -1385,13 +1408,39 @@ for k, col in zip(baseClasses[:3], colors):
                  color='k')
 
  ### starting streaming
-pca.fit(embeddings_newClasses_list['embeddings'])
+pca.partial_fit(embeddings_newClasses_list['embeddings'])
 emb_pca = pca.transform(embeddings_newClasses_list['embeddings'])
 emb_labels = np.argmax(np.array(embeddings_newClasses_list['labels']),axis=1)
 #emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
 
 #ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)
-for k, col in zip([NewClasses[0]], colors[len(baseClasses[:3])+1:]):
+for k, col in zip([NewClasses[-2]], colors[len(baseClasses[:3])+1:]):
+
+    plt.plot(emb_pca[emb_labels==mapping[k],0], emb_pca[emb_labels==mapping[k],1], 'o',
+            markerfacecolor=col, markeredgecolor=col,
+             marker=markers[mapping[k]%len(markers)],markersize=7)
+
+    #add label
+    plt.annotate(LABELS[k], (np.mean(emb_pca[emb_labels==mapping[k],0],axis=0), np.mean(emb_pca[emb_labels==mapping[k],1], axis=0)),
+                 horizontalalignment='center',
+                 verticalalignment='center',
+                 size=15, weight='bold',rotation=45,
+                 color='k')
+
+
+all_data = copy.deepcopy(embeddings_list)
+all_data['embeddings'].extend(embeddings_newClasses_list['embeddings'])
+all_data['labels'] = list(np.hstack((all_data['labels'], np.zeros((len(all_data['labels']),newClassesNb)))))
+all_data['labels'].extend(embeddings_newClasses_list['labels'])
+pca = IncPCA(n_components=2)
+pca.partial_fit(all_data['embeddings'])
+emb_pca = pca.transform(all_data['embeddings'])
+emb_labels = np.argmax(np.array(all_data['labels']),axis=1)
+#emb_pca, emb_labels = order_classes(emb_pca, emb_labels,0)
+
+#ll = np.array(list(model.memory.prototypes.keys()), dtype=np.int32)[:3]
+all_classes = np.append(baseClasses[:3], NewClasses[0])
+for k, col in zip(all_classes, colors):
 
     plt.plot(emb_pca[emb_labels==mapping[k],0], emb_pca[emb_labels==mapping[k],1], 'o',
             markerfacecolor=col, markeredgecolor=col,
